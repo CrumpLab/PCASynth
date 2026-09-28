@@ -1,0 +1,61 @@
+name: build
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Linux (engine tests, tools, listening examples)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Unit tests
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Train on the synthetic set and render examples
+        run: scripts/render_examples.sh build renders
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: listening-examples
+          path: |
+            renders/examples
+            renders/training.txt
+            renders/synthetic.pcsm
+            renders/synthetic.pcsm.scores.csv
+          retention-days: 14
+
+  macos:
+    name: macOS (engine tests)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Ninja
+        run: brew list ninja >/dev/null 2>&1 || brew install ninja
+
+      - name: Configure (universal arm64 + x86_64)
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Unit tests
+        run: ctest --test-dir build --output-on-failure

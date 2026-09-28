@@ -1,0 +1,17 @@
+# Build output
+build*/
+dist/
+*.zip
+
+# Generated audio and models (regenerate with scripts/render_examples.sh)
+training/
+renders/
+*.wav
+*.pcsm
+*.pcsm.scores.csv
+
+# Editors / OS
+.DS_Store
+.vscode/
+.idea/
+*.swp
