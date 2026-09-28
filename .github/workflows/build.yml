@@ -3,6 +3,7 @@ name: build
 on:
   push:
     branches: ["**"]
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
@@ -12,13 +13,17 @@ concurrency:
 
 jobs:
   linux:
-    name: Linux (engine tests, tools, listening examples)
+    name: Linux (tests, VST3 + pluginval, listening examples)
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y ninja-build
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build xvfb libasound2-dev libx11-dev libxrandr-dev \
+            libxinerama-dev libxcursor-dev libxcomposite-dev libfreetype-dev libfontconfig1-dev \
+            libgl1-mesa-dev
 
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
@@ -26,8 +31,20 @@ jobs:
       - name: Build
         run: cmake --build build --parallel
 
-      - name: Unit tests
-        run: ctest --test-dir build --output-on-failure
+      - name: Unit and plugin tests
+        run: xvfb-run -a ctest --test-dir build --output-on-failure
+
+      - name: pluginval (VST3)
+        run: |
+          curl -sSfL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Linux.zip
+          unzip -q pluginval.zip
+          xvfb-run -a ./pluginval --strictness-level 10 --validate-in-process \
+            "build/plugin/PCASynth_artefacts/Release/VST3/PCASynth.vst3"
+
+      - name: Editor snapshot
+        run: |
+          mkdir -p ui
+          xvfb-run -a build/plugin/pcs-ui-snapshot ui/editor.png 760 700 vowel_1
 
       - name: Train on the synthetic set and render examples
         run: scripts/render_examples.sh build renders
@@ -42,9 +59,25 @@ jobs:
             renders/synthetic.pcsm.scores.csv
           retention-days: 14
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: editor-snapshot
+          path: ui
+          retention-days: 14
+
   macos:
-    name: macOS (engine tests)
+    name: macOS (universal VST3 + Standalone, pluginval, package)
     runs-on: macos-14
+    env:
+      # Optional (repository secrets): Developer ID signing and notarization.
+      # Without them the build is ad-hoc signed.
+      MACOS_CERTS_P12: ${{ secrets.MACOS_CERTS_P12 }}
+      MACOS_CERTS_PASSWORD: ${{ secrets.MACOS_CERTS_PASSWORD }}
+      MACOS_SIGN_APP: ${{ secrets.MACOS_SIGN_APP }}
+      MACOS_SIGN_INSTALLER: ${{ secrets.MACOS_SIGN_INSTALLER }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
 
@@ -57,5 +90,66 @@ jobs:
       - name: Build
         run: cmake --build build --parallel
 
-      - name: Unit tests
+      - name: Unit and plugin tests
         run: ctest --test-dir build --output-on-failure
+
+      - name: Check universal binary and ad-hoc sign
+        run: |
+          ART="build/plugin/PCASynth_artefacts/Release"
+          lipo -info "$ART/VST3/PCASynth.vst3/Contents/MacOS/PCASynth"
+          codesign --force --deep --sign - "$ART/VST3/PCASynth.vst3"
+
+      - name: pluginval (VST3)
+        run: |
+          curl -sSfL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip
+          unzip -q pluginval.zip
+          pluginval.app/Contents/MacOS/pluginval --strictness-level 10 --validate-in-process \
+            "build/plugin/PCASynth_artefacts/Release/VST3/PCASynth.vst3"
+
+      - name: Import signing certificates
+        if: env.MACOS_CERTS_P12 != ''
+        run: |
+          KC_PW="$(uuidgen)"
+          echo "$MACOS_CERTS_P12" | base64 --decode > certs.p12
+          security create-keychain -p "$KC_PW" build.keychain
+          security set-keychain-settings -lut 21600 build.keychain
+          security unlock-keychain -p "$KC_PW" build.keychain
+          security import certs.p12 -k build.keychain -P "$MACOS_CERTS_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/productbuild -T /usr/bin/pkgbuild
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KC_PW" build.keychain
+          security list-keychains -d user -s build.keychain login.keychain
+          rm certs.p12
+
+      - name: Package (zip + installer)
+        run: scripts/package_macos.sh build/plugin/PCASynth_artefacts/Release dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PCASynth-macOS
+          path: dist/*
+          retention-days: 30
+
+  release:
+    name: GitHub release (tags v*)
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, macos]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: PCASynth-macOS
+          path: dist
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          awk -v v="$VERSION" '$0 ~ "^## \\[?" v {on=1; next} on && /^## / {exit} on {print}' CHANGELOG.md > notes.md
+          PRE=""
+          case "$VERSION" in 0.*) PRE="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" dist/* --title "PCASynth $VERSION" --notes-file notes.md $PRE

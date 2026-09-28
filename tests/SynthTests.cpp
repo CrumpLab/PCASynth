@@ -185,3 +185,50 @@ TEST_CASE ("Moves in the space glide, and far-out points stay finite", "[synth]"
     s.process (ch, 1, 32, nullptr, 0);
     CHECK (s.currentZ()[0] == 2.0f);
 }
+
+TEST_CASE ("Sustain pedal holds released notes until it lifts", "[synth]")
+{
+    const auto m = smallModel();
+    SynthParams p = at (m->soundZ (m->soundIndex ("organ_1")));
+    p.mode = PlayMode::Loop;
+    p.release = 0.05f;
+    Synth s;
+    s.prepare (48000.0);
+    s.setParams (p);
+    s.setModel (m);
+    std::vector<float> buf (4800);
+    float* ch[] = { buf.data() };
+    auto block = [&] (std::vector<MidiEvent> ev) {
+        s.process (ch, 1, 4800, ev.data(), static_cast<int> (ev.size()));
+    };
+    block ({ { 0, MidiEvent::Type::Sustain, 0, 1.0f }, { 0, MidiEvent::Type::NoteOn, 60, 1.0f } });
+    block ({ { 0, MidiEvent::Type::NoteOff, 60, 0.0f } });
+    for (int i = 0; i < 5; ++i)
+        block ({});
+    CHECK (s.activeVoiceCount() == 1);
+    block ({ { 0, MidiEvent::Type::Sustain, 0, 0.0f } });
+    block ({});
+    CHECK (s.activeVoiceCount() == 0);
+}
+
+TEST_CASE ("Models swap in without the audio thread freeing them", "[synth]")
+{
+    const auto m = smallModel();
+    Synth s;
+    s.prepare (48000.0);
+    auto slot = Synth::makeSlot (m);
+    s.swapModel (slot);
+    CHECK (s.model() == m.get());
+    CHECK (slot == nullptr); // no previous slot
+
+    auto empty = Synth::makeSlot (nullptr);
+    s.swapModel (empty);
+    CHECK (s.model() == nullptr);
+    REQUIRE (empty != nullptr);
+    CHECK (empty->model == m); // handed back, still alive
+    std::vector<float> buf (256, 1.0f);
+    float* ch[] = { buf.data() };
+    MidiEvent on { 0, MidiEvent::Type::NoteOn, 60, 1.0f };
+    s.process (ch, 1, 256, &on, 1);
+    CHECK (buf[100] == 0.0f);
+}

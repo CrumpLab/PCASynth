@@ -11,6 +11,7 @@
 namespace pcs {
 
 constexpr int kMaxComponents = 32;
+constexpr int kMaxModelHarmonics = 128;
 
 // A trained PCA sound space: the mean harmonic envelope plus principal
 // components, and where every training sound sits in the space. A point in
@@ -18,6 +19,7 @@ constexpr int kMaxComponents = 32;
 // scores along each component), so ±2 covers most of the training set.
 struct Model
 {
+    std::string title;              // shown in the plugin, e.g. the file name
     AnalysisSettings analysis;
     int numFrames = 0;
     int numHarmonics = 0;

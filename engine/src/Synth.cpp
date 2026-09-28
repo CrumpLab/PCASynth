@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <stdexcept>
 
 namespace pcs {
 
@@ -13,10 +14,6 @@ constexpr float kLn1000 = 6.90775527898f; // release reaches -60 dB in `release`
 void Synth::prepare (double sampleRate)
 {
     sr = sampleRate;
-    mono.assign (static_cast<size_t> (kSubBlock), 0.0f);
-    scratchDb.assign (static_cast<size_t> (kMaxHarmonics), 0.0f);
-    scratchA.assign (static_cast<size_t> (kMaxHarmonics), 0.0f);
-    scratchB.assign (static_cast<size_t> (kMaxHarmonics), 0.0f);
     // Fixed, spread-out starting phases: every note starts the same way,
     // without the peaky waveform of all-zero phases.
     for (int h = 0; h < kMaxHarmonics; ++h)
@@ -27,13 +24,31 @@ void Synth::prepare (double sampleRate)
     reset();
 }
 
+std::unique_ptr<Synth::ModelSlot> Synth::makeSlot (std::shared_ptr<const Model> model)
+{
+    auto slot = std::make_unique<ModelSlot>();
+    if (model != nullptr && model->numHarmonics > kMaxHarmonics)
+        throw std::invalid_argument ("model has more harmonics than the synth plays");
+    if (model != nullptr)
+    {
+        slot->cache.assign (static_cast<size_t> (model->dims()), 0.0f);
+        slot->stamps.assign (static_cast<size_t> (model->numFrames), 0);
+    }
+    slot->model = std::move (model);
+    return slot;
+}
+
 void Synth::setModel (std::shared_ptr<const Model> model)
 {
-    current = std::move (model);
-    const size_t size = current ? static_cast<size_t> (current->dims()) : 0;
-    cache.assign (size, 0.0f);
-    cacheStamp.assign (current ? static_cast<size_t> (current->numFrames) : 0, 0);
-    scratchDb.assign (std::max<size_t> (kMaxHarmonics, current ? static_cast<size_t> (current->numHarmonics) : 0), 0.0f);
+    auto slot = makeSlot (std::move (model));
+    swapModel (slot);
+}
+
+void Synth::swapModel (std::unique_ptr<ModelSlot>& slot) noexcept
+{
+    std::swap (current, slot); // an empty slot means "no model"
+    if (current != nullptr)
+        std::fill (current->stamps.begin(), current->stamps.end(), 0u);
     stamp = 1;
     reset();
 }
@@ -43,6 +58,7 @@ void Synth::reset() noexcept
     for (auto& v : voices)
         v.active = false;
     bend = 0.0f;
+    sustainDown = false;
     for (int j = 0; j < kMaxComponents; ++j)
         zSmooth[static_cast<size_t> (j)] = j < params.activeComponents ? params.z[static_cast<size_t> (j)] * params.exaggerate : 0.0f;
     ++stamp;
@@ -94,16 +110,32 @@ void Synth::handle (const MidiEvent& e) noexcept
                 if (v.active)
                     setVoiceFrequency (v);
             break;
+        case MidiEvent::Type::Sustain:
+            sustainDown = e.value >= 0.5f;
+            if (! sustainDown)
+                for (auto& v : voices)
+                    if (v.active && v.sustained)
+                    {
+                        v.sustained = false;
+                        v.releasing = true;
+                        v.releaseSeconds = params.release;
+                    }
+            break;
         case MidiEvent::Type::AllNotesOff:
+            sustainDown = false;
             for (auto& v : voices)
+            {
                 v.releasing = v.active;
+                v.sustained = false;
+                v.releaseSeconds = params.release;
+            }
             break;
     }
 }
 
 void Synth::noteOn (int note, float velocity) noexcept
 {
-    if (! current)
+    if (model() == nullptr)
         return;
     const int poly = std::clamp (params.polyphony, 1, kMaxVoices);
     Voice* v = nullptr;
@@ -123,12 +155,13 @@ void Synth::noteOn (int note, float velocity) noexcept
 
     v->active = true;
     v->releasing = false;
+    v->sustained = false;
     v->note = note;
     v->age = ++noteCounter;
     const float sens = std::clamp (params.velocitySensitivity, 0.0f, 1.0f);
     v->gain = 1.0f - sens + sens * std::clamp (velocity, 0.0f, 1.0f) * std::clamp (velocity, 0.0f, 1.0f);
     v->dir = 1;
-    v->pos = params.mode == PlayMode::Scan ? params.scanPosition * (current->numFrames - 1) : 0.0;
+    v->pos = params.mode == PlayMode::Scan ? params.scanPosition * (model()->numFrames - 1) : 0.0;
     v->env = 0.0f;
     v->releaseSeconds = params.release;
     for (int h = 0; h < kMaxHarmonics; ++h)
@@ -143,8 +176,13 @@ void Synth::noteOn (int note, float velocity) noexcept
 void Synth::noteOff (int note) noexcept
 {
     for (auto& v : voices)
-        if (v.active && ! v.releasing && v.note == note)
+        if (v.active && ! v.releasing && ! v.sustained && v.note == note)
         {
+            if (sustainDown)
+            {
+                v.sustained = true;
+                continue;
+            }
             v.releasing = true;
             v.releaseSeconds = params.release;
         }
@@ -153,7 +191,7 @@ void Synth::noteOff (int note) noexcept
 void Synth::setVoiceFrequency (Voice& v) noexcept
 {
     v.freq = midiToHz (v.note + bend * params.pitchBendRange);
-    const int modelH = current ? std::min (current->numHarmonics, kMaxHarmonics) : 0;
+    const int modelH = model() != nullptr ? model()->numHarmonics : 0;
     const int limit = std::min (modelH, std::max (1, params.maxHarmonics));
     int n = 0;
     while (n < limit && (n + 1) * v.freq < 0.47 * sr)
@@ -171,23 +209,23 @@ void Synth::setVoiceFrequency (Voice& v) noexcept
 
 const float* Synth::frame (int t) noexcept
 {
-    const auto& m = *current;
+    const auto& m = *current->model;
     t = std::clamp (t, 0, m.numFrames - 1);
-    float* dst = cache.data() + static_cast<size_t> (t) * static_cast<size_t> (m.numHarmonics);
-    if (cacheStamp[static_cast<size_t> (t)] != stamp)
+    float* dst = current->cache.data() + static_cast<size_t> (t) * static_cast<size_t> (m.numHarmonics);
+    if (current->stamps[static_cast<size_t> (t)] != stamp)
     {
         m.decodeFrame (t, zSmooth.data(), kMaxComponents, scratchDb.data());
         const float floorLin = std::pow (10.0f, m.floorDb / 20.0f);
         for (int h = 0; h < m.numHarmonics; ++h)
             dst[h] = std::max (0.0f, std::pow (10.0f, scratchDb[static_cast<size_t> (h)] / 20.0f) - floorLin);
-        cacheStamp[static_cast<size_t> (t)] = stamp;
+        current->stamps[static_cast<size_t> (t)] = stamp;
     }
     return dst;
 }
 
 void Synth::frameAt (double pos, float* dst) noexcept
 {
-    const int h = std::min (current->numHarmonics, kMaxHarmonics);
+    const int h = current->model->numHarmonics;
     const int t0 = static_cast<int> (std::floor (pos));
     const auto frac = static_cast<float> (pos - t0);
     const float* a = frame (t0);
@@ -199,7 +237,7 @@ void Synth::frameAt (double pos, float* dst) noexcept
 void Synth::render (float* out, int n) noexcept
 {
     std::fill (out, out + n, 0.0f);
-    if (! current)
+    if (model() == nullptr)
         return;
 
     // Glide towards the target point.
@@ -223,7 +261,7 @@ void Synth::render (float* out, int n) noexcept
 
 void Synth::renderVoice (Voice& v, float* out, int n) noexcept
 {
-    const auto& m = *current;
+    const auto& m = *current->model;
     const double last = m.numFrames - 1;
     const double step = params.speed * m.frameRate * n / sr;
 

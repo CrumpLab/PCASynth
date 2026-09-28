@@ -18,6 +18,7 @@ namespace {
 void usage()
 {
     std::cerr << "usage: pcs-train -o model.pcsm [options] <wav files or directories>\n"
+                 "  --title T         name shown in the plugin (default: the file name)\n"
                  "  --note N          MIDI note every sound plays (default 60 = C4)\n"
                  "  --duration S      seconds analysed from each onset (default 4)\n"
                  "  --harmonics H     harmonics tracked (default 64, max 128)\n"
@@ -33,13 +34,14 @@ int main (int argc, char** argv)
 {
     pcs::AnalysisSettings s;
     int components = pcs::kMaxComponents;
-    std::string outPath;
+    std::string outPath, title;
     std::vector<std::string> inputs;
     for (int i = 1; i < argc; ++i)
     {
         const std::string a = argv[i];
         auto next = [&] { if (i + 1 >= argc) { usage(); std::exit (2); } return std::string (argv[++i]); };
         if (a == "-o") outPath = next();
+        else if (a == "--title") title = next();
         else if (a == "--note") s.midiNote = std::stoi (next());
         else if (a == "--duration") s.duration = std::stod (next());
         else if (a == "--harmonics") s.harmonics = std::stoi (next());
@@ -67,7 +69,8 @@ int main (int argc, char** argv)
             const double cents = 1200.0 * std::log2 (h.f0 / pcs::midiToHz (s.midiNote));
             std::printf ("  %-24s f0 %8.2f Hz (%+5.1f cents)\n", h.name.c_str(), h.f0, cents);
         }
-        const auto model = pcs::trainModel (sounds, s, components);
+        auto model = pcs::trainModel (sounds, s, components);
+        model.title = title.empty() ? pcs::tools::stem (outPath) : title;
         pcs::saveModel (model, outPath);
 
         std::printf ("\n%d sounds, %d frames x %d harmonics, %d components\n", model.numSounds(), model.numFrames,

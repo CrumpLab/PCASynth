@@ -41,11 +41,11 @@ struct SynthParams
 
 struct MidiEvent
 {
-    enum class Type { NoteOn, NoteOff, PitchBend, AllNotesOff };
+    enum class Type { NoteOn, NoteOff, PitchBend, Sustain, AllNotesOff };
     int offset = 0;      // sample within the block
     Type type = Type::NoteOn;
     int note = 60;
-    float value = 1.0f;  // NoteOn: velocity 0..1; PitchBend: -1..1
+    float value = 1.0f;  // NoteOn: velocity 0..1; PitchBend: -1..1; Sustain: pedal down when >= 0.5
 };
 
 // Polyphonic additive synth that plays points of a Model. Each voice runs a
@@ -58,10 +58,24 @@ public:
     static constexpr int kMaxHarmonics = 128;
     static constexpr int kSubBlock = 32;
 
+    // A model plus the per-model buffers the synth needs, built off the
+    // audio thread so a model can be swapped in without allocating.
+    struct ModelSlot
+    {
+        std::shared_ptr<const Model> model;
+        std::vector<float> cache;       // numFrames × numHarmonics, linear amplitude
+        std::vector<uint32_t> stamps;   // per frame: point the cache was decoded for
+    };
+    static std::unique_ptr<ModelSlot> makeSlot (std::shared_ptr<const Model> model); // allocates
+
     // Not real-time safe (allocates).
     void prepare (double sampleRate);
     void setModel (std::shared_ptr<const Model> model);
-    const Model* model() const noexcept { return current.get(); }
+
+    // Real-time safe: installs `slot` (sounding notes stop) and hands back
+    // the previous slot in `slot`, to be destroyed off the audio thread.
+    void swapModel (std::unique_ptr<ModelSlot>& slot) noexcept;
+    const Model* model() const noexcept { return current != nullptr ? current->model.get() : nullptr; }
 
     // Real-time safe.
     void setParams (const SynthParams& p) noexcept { params = p; }
@@ -78,6 +92,7 @@ private:
     {
         bool active = false;
         bool releasing = false;
+        bool sustained = false; // key up while the pedal is down
         int note = 60;
         float gain = 1.0f;
         uint64_t age = 0;
@@ -100,18 +115,17 @@ private:
     void frameAt (double pos, float* dst) noexcept;
 
     double sr = 48000.0;
-    std::shared_ptr<const Model> current;
+    std::unique_ptr<ModelSlot> current;
     SynthParams params;
     std::array<Voice, kMaxVoices> voices;
     uint64_t noteCounter = 0;
     float bend = 0.0f;
+    bool sustainDown = false;
 
     std::array<float, kMaxComponents> zSmooth {};
-    std::vector<float> cache;       // numFrames × numHarmonics, linear amplitude
-    std::vector<uint32_t> cacheStamp;
     uint32_t stamp = 1;
-    std::vector<float> scratchDb, scratchA, scratchB;
-    std::vector<float> mono;
+    std::array<float, kMaxHarmonics> scratchDb {}, scratchA {}, scratchB {};
+    std::array<float, kSubBlock> mono {};
     std::array<float, kMaxHarmonics> phase0 {};
 };
 

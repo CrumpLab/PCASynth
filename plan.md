@@ -6,8 +6,8 @@ of WAVs of different instruments all playing the same note. It learns the
 space those sounds span, and you play any point in that space: the training
 sounds themselves, morphs between them, or places no instrument has been.
 
-> **Status:** Stage 1 (engine and offline tools) is built. Decisions are
-> recorded in §8. Licence: open source (AGPLv3, following JUCE's open-source
+> **Status:** Stages 1 and 2 are built: the engine, the offline tools and a
+> playable VST3. Decisions are recorded in §6. Licence: open source (AGPLv3, following JUCE's open-source
 > licence).
 
 ---
@@ -137,7 +137,7 @@ PCASynth/
     Synth      polyphonic additive voices, play modes, smoothing
   tools/    pcs-testgen, pcs-train, pcs-render, pcs-examples
   tests/    Catch2 unit + regression tests
-  plugin/   (Stage 2) JUCE wrapper: parameters, state, editor
+  plugin/   JUCE wrapper: parameters, state, editor, built-in factory model
 ```
 
 - **Engine separate from JUCE** (as in MinervaSpaceEcho): built, tested and
@@ -155,7 +155,7 @@ Each stage ends with something to **hear**.
 ### Stage 0: Scaffolding — done
 - Repo layout, CMake, engine library, Catch2 tests, CI (Linux + macOS).
 
-### Stage 1: Engine and offline tools — done, awaiting a listen
+### Stage 1: Engine and offline tools — done
 - Harmonic analysis, PCA, model file, additive resynthesis, play modes.
 - `pcs-testgen` (synthetic training set), `pcs-train` (WAVs → model + scores
   CSV), `pcs-render` (any point → WAV), `pcs-examples` (listening set + map).
@@ -172,19 +172,47 @@ Each stage ends with something to **hear**.
   within a note, PC1–PC4 sweeps, melodies across 3 octaves, a chord pad
   wandering through the space, the space's extremes, and envelope scans.
 
-### Stage 2: Plugin v1
-- JUCE plugin, VST3 + Standalone (for testing without a DAW), macOS universal.
-- Load a `.pcsm` (file chooser, drag and drop). A factory model (the
-  synthetic set) is built in.
-- MIDI in, 16-voice polyphony, pitch bend.
+### Stage 2: Plugin v1 — done, awaiting a play in a DAW
+- JUCE plugin: VST3 + Standalone (for testing without a DAW), universal
+  macOS (arm64 + x86_64).
+- **Factory model built in:** the synthetic set is generated and trained by
+  the offline tools at build time, then compiled into the plugin.
+- **Loading models:** Load Model… (file chooser) or drag and drop a `.pcsm`
+  onto the window. Factory Space returns to the built-in model.
+- **Model swaps without allocating on the audio thread:** the message thread
+  prepares a slot (model plus decode cache), the audio thread swaps it in,
+  and the old one is freed back on the message thread.
+- **Jump to** a training sound sets PC1–PC16 to its coordinates. Components
+  17–32 ("detail") live in the plugin state, so the sound is reproduced
+  exactly. **Centre** returns to the mean.
+- MIDI: notes, velocity, pitch bend, sustain pedal, all notes off.
+  Polyphony 1–32 (default 16).
 - Parameters:
-  - PC1–PC8 (z, ±4)
-  - Components used, Exaggerate, Morph Time
-  - Play Mode, Loop Start/End, Scan Position, Speed
-  - Attack, Release, Brightness (tilt), Velocity Sensitivity, Gain
-- **The model is embedded in the plugin state**, so a Live set reopens with
-  its sound space.
-- Generic editor. CI: macOS build + pluginval.
+  - **The point:** PC1–PC16 (SD, ±4), Components Used, Exaggerate, Morph
+    Time
+  - **Playback:** Play Mode (default Loop, so held notes sustain), Loop
+    Start/End, Scan Position, Speed
+  - **Voice:** Attack, Release, Brightness (dB/octave), Harmonics, Velocity
+    Sensitivity, Pitch Bend Range, Polyphony, Gain
+- **State:** the parameters plus the detail components. A loaded model is
+  embedded (≈3.4 MB for 64 harmonics × 400 frames × 32 components), so a Live
+  set reopens with its space. The factory model is not embedded (a few KB).
+  If an embedded model is damaged, the parameters still load and the
+  factory space returns.
+- Editor: a model bar (load, factory, model summary, jump to, centre) above
+  JUCE's generic parameter panel.
+- Tests (headless):
+  - A note sounds and stops after its release.
+  - Jumping sets the coordinates.
+  - The state round trip with an embedded model renders identically.
+  - A damaged state falls back to the factory space.
+  - Swapping models during playback stays finite.
+- pluginval passes at strictness 10 (Linux, locally); CI also runs it on
+  macOS.
+- CI: macOS universal VST3 + Standalone, pluginval, and a zip plus a `.pkg`
+  installer (ad-hoc signed unless signing secrets are set); tags `v*` make a
+  GitHub release. Linux also renders the editor snapshot and the listening
+  examples.
 - **Done when:** you play it in your DAW from a CI build.
 
 ### Stage 3: Custom UI

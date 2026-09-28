@@ -57,10 +57,12 @@ TEST_CASE ("Training sounds decode back from their coordinates", "[model]")
 
 TEST_CASE ("Model files round-trip", "[model]")
 {
-    const auto m = trainModel (smallSet(), smallSettings(), 6);
+    auto m = trainModel (smallSet(), smallSettings(), 6);
+    m.title = "Small set";
     const auto bytes = serializeModel (m);
     const auto back = deserializeModel (bytes.data(), bytes.size());
     CHECK (back.names == m.names);
+    CHECK (back.title == "Small set");
     CHECK (back.numComponents() == 6);
     CHECK (back.analysis.harmonics == 24);
     CHECK (back.pca.totalVariance == Approx (m.pca.totalVariance));

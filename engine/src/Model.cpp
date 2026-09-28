@@ -152,6 +152,8 @@ Model trainModel (const std::vector<HarmonicSound>& sounds, const AnalysisSettin
 {
     if (sounds.size() < 2)
         throw std::invalid_argument ("training needs at least two sounds");
+    if (sounds[0].numHarmonics > kMaxModelHarmonics)
+        throw std::invalid_argument ("at most 128 harmonics");
     Model m;
     m.analysis = settings;
     m.numFrames = sounds[0].numFrames;
@@ -178,6 +180,7 @@ std::vector<uint8_t> serializeModel (const Model& m)
     nlohmann::json j;
     j["format"] = "pcasynth-model";
     j["version"] = kFormatVersion;
+    j["title"] = m.title;
     j["analysis"] = settingsToJson (m.analysis);
     j["numFrames"] = m.numFrames;
     j["numHarmonics"] = m.numHarmonics;
@@ -217,6 +220,7 @@ Model deserializeModel (const uint8_t* data, size_t size)
     try
     {
         const auto j = nlohmann::json::parse (data + 12, data + 12 + headerSize);
+        m.title = j.value ("title", std::string());
         m.analysis = settingsFromJson (j.at ("analysis"));
         m.numFrames = j.at ("numFrames");
         m.numHarmonics = j.at ("numHarmonics");
@@ -238,7 +242,7 @@ Model deserializeModel (const uint8_t* data, size_t size)
     m.pca.dims = m.dims();
     const auto d = static_cast<size_t> (m.dims());
     const auto k = static_cast<size_t> (m.pca.numComponents);
-    if (m.numFrames <= 0 || m.numHarmonics <= 0 || k > static_cast<size_t> (kMaxComponents) || m.pca.variance.size() != k
+    if (m.numFrames <= 0 || m.numHarmonics <= 0 || m.numHarmonics > kMaxModelHarmonics || k > static_cast<size_t> (kMaxComponents) || m.pca.variance.size() != k
         || m.pca.scores.size() != k * m.names.size())
         throw std::runtime_error ("model header is inconsistent");
     const size_t offset = 12 + headerSize;
