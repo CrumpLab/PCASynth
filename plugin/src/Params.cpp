@@ -27,6 +27,22 @@ void addInt (Layout& l, const juce::String& id, const juce::String& name, int lo
     l.add (std::make_unique<juce::AudioParameterInt> (juce::ParameterID { id, 1 }, name, lo, hi, def));
 }
 
+// Seconds shown as ms below one second.
+void addTime (Layout& l, const juce::String& id, const juce::String& name, juce::NormalisableRange<float> range, float def)
+{
+    l.add (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { id, 1 }, name, range, def,
+        juce::AudioParameterFloatAttributes()
+            .withLabel ("s")
+            .withStringFromValueFunction ([] (float v, int) {
+                return v < 1.0f ? juce::String (v * 1000.0f, v < 0.01f ? 1 : 0) + " ms" : juce::String (v, 2) + " s";
+            })
+            .withValueFromStringFunction ([] (const juce::String& s) {
+                const float x = s.getFloatValue();
+                return s.containsIgnoreCase ("ms") ? x / 1000.0f : x;
+            })));
+}
+
 juce::AudioParameterFloatAttributes percent()
 {
     return juce::AudioParameterFloatAttributes()
@@ -43,7 +59,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
         addFloat (l, pcId (j), "PC" + juce::String (j + 1), { -4.0f, 4.0f }, 0.0f, "SD");
     addInt (l, id::components, "Components Used", 0, pcs::kMaxComponents, pcs::kMaxComponents);
     addFloat (l, id::exaggerate, "Exaggerate", { 0.0f, 3.0f }, 1.0f, "x");
-    addFloat (l, id::morphTime, "Morph Time", skewed (0.0f, 2.0f, 0.2f), 0.05f, "s");
+    addTime (l, id::morphTime, "Morph Time", skewed (0.0f, 2.0f, 0.2f), 0.05f);
     l.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { id::playMode, 1 }, "Play Mode",
                                                          playModeNames(), 1));
     l.add (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { id::loopStart, 1 }, "Loop Start",
@@ -53,8 +69,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
     l.add (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { id::scanPosition, 1 }, "Scan Position",
                                                         juce::NormalisableRange<float> (0.0f, 1.0f), 0.2f, percent()));
     addFloat (l, id::speed, "Speed", skewed (0.0f, 4.0f, 1.0f), 1.0f, "x");
-    addFloat (l, id::attack, "Attack", skewed (0.0005f, 2.0f, 0.1f), 0.003f, "s");
-    addFloat (l, id::release, "Release", skewed (0.005f, 5.0f, 0.5f), 0.3f, "s");
+    addTime (l, id::attack, "Attack", skewed (0.0005f, 2.0f, 0.1f), 0.003f);
+    addTime (l, id::release, "Release", skewed (0.005f, 5.0f, 0.5f), 0.3f);
     addFloat (l, id::brightness, "Brightness", { -12.0f, 12.0f }, 0.0f, "dB/oct");
     addInt (l, id::harmonics, "Harmonics", 1, pcs::Synth::kMaxHarmonics, pcs::Synth::kMaxHarmonics);
     addFloat (l, id::velocity, "Velocity Sensitivity", { 0.0f, 1.0f }, 1.0f);

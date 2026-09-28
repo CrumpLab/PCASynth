@@ -3,6 +3,8 @@
 
 #include "FactoryModel.h"
 
+#include "pcs/Wav.h"
+
 #include <bit>
 
 namespace {
@@ -22,6 +24,7 @@ PCASynthProcessor::PCASynthProcessor()
 
 PCASynthProcessor::~PCASynthProcessor()
 {
+    alive->store (false);
     stopTimer();
     delete pending.exchange (nullptr);
     delete retired.exchange (nullptr);
@@ -89,18 +92,61 @@ void PCASynthProcessor::setParamValue (const juce::String& paramId, float realVa
     }
 }
 
-void PCASynthProcessor::setDetail (const std::array<float, pcs::kMaxComponents>& d) noexcept
+void PCASynthProcessor::setDetail (const Point& d) noexcept
 {
     for (size_t j = 0; j < d.size(); ++j)
         detail[j].store (d[j], std::memory_order_relaxed);
 }
 
-std::array<float, pcs::kMaxComponents> PCASynthProcessor::getDetail() const noexcept
+PCASynthProcessor::Point PCASynthProcessor::getDetail() const noexcept
 {
-    std::array<float, pcs::kMaxComponents> d {};
+    Point d {};
     for (size_t j = 0; j < d.size(); ++j)
         d[j] = detail[j].load (std::memory_order_relaxed);
     return d;
+}
+
+PCASynthProcessor::Point PCASynthProcessor::getPoint() const
+{
+    Point z = getDetail();
+    for (int j = 0; j < pcsplugin::kNumPcParams; ++j)
+        z[static_cast<size_t> (j)] = parameters.getRawParameterValue (pcsplugin::pcId (j))->load();
+    return z;
+}
+
+void PCASynthProcessor::setPoint (const Point& z)
+{
+    Point d {};
+    for (int j = 0; j < pcs::kMaxComponents; ++j)
+    {
+        const float v = z[static_cast<size_t> (j)];
+        if (j < pcsplugin::kNumPcParams)
+        {
+            if (auto* param = parameters.getParameter (pcsplugin::pcId (j)))
+            {
+                const float normalised = param->convertTo0to1 (juce::jlimit (-4.0f, 4.0f, v));
+                if (std::abs (param->getValue() - normalised) > 1e-7f)
+                    param->setValueNotifyingHost (normalised);
+            }
+        }
+        else
+            d[static_cast<size_t> (j)] = v;
+    }
+    setDetail (d);
+}
+
+void PCASynthProcessor::beginPointGesture()
+{
+    for (int j = 0; j < pcsplugin::kNumPcParams; ++j)
+        if (auto* param = parameters.getParameter (pcsplugin::pcId (j)))
+            param->beginChangeGesture();
+}
+
+void PCASynthProcessor::endPointGesture()
+{
+    for (int j = 0; j < pcsplugin::kNumPcParams; ++j)
+        if (auto* param = parameters.getParameter (pcsplugin::pcId (j)))
+            param->endChangeGesture();
 }
 
 void PCASynthProcessor::jumpToSound (int index)
@@ -109,23 +155,88 @@ void PCASynthProcessor::jumpToSound (int index)
     if (m == nullptr || index < 0 || index >= m->numSounds())
         return;
     const auto z = m->soundZ (index);
-    std::array<float, pcs::kMaxComponents> d {};
-    for (int j = 0; j < pcs::kMaxComponents; ++j)
-    {
-        const float v = j < static_cast<int> (z.size()) ? z[static_cast<size_t> (j)] : 0.0f;
-        if (j < pcsplugin::kNumPcParams)
-            setParamValue (pcsplugin::pcId (j), juce::jlimit (-4.0f, 4.0f, v));
-        else
-            d[static_cast<size_t> (j)] = v;
-    }
-    setDetail (d);
+    Point p {};
+    for (size_t j = 0; j < z.size() && j < p.size(); ++j)
+        p[j] = z[j];
+    beginPointGesture();
+    setPoint (p);
+    endPointGesture();
 }
 
 void PCASynthProcessor::resetToMean()
 {
-    for (int j = 0; j < pcsplugin::kNumPcParams; ++j)
-        setParamValue (pcsplugin::pcId (j), 0.0f);
-    setDetail ({});
+    beginPointGesture();
+    setPoint ({});
+    endPointGesture();
+}
+
+int PCASynthProcessor::getVoicePositions (float* positions, int max) const noexcept
+{
+    const int n = std::min (max, numVoicePos.load());
+    for (int i = 0; i < n; ++i)
+        positions[i] = voicePos[static_cast<size_t> (i)].load (std::memory_order_relaxed);
+    return n;
+}
+
+juce::var PCASynthProcessor::getUiValue (const juce::Identifier& key, const juce::var& fallback) const
+{
+    return parameters.state.getProperty (key, fallback);
+}
+
+void PCASynthProcessor::setUiValue (const juce::Identifier& key, const juce::var& value)
+{
+    parameters.state.setProperty (key, value, nullptr);
+}
+
+pcs::AudioBuffer PCASynthProcessor::renderNote (std::shared_ptr<const pcs::Model> m, const pcs::SynthParams& params, int note,
+                                                double seconds)
+{
+    pcs::Synth offline;
+    offline.prepare (48000.0);
+    offline.setParams (params);
+    offline.setModel (std::move (m));
+    const double release = std::max (0.0, static_cast<double> (params.release));
+    const int total = static_cast<int> (seconds * 48000.0);
+    const int noteOff = std::max (1, static_cast<int> ((seconds - std::min (release, 0.5 * seconds)) * 48000.0));
+    pcs::AudioBuffer out;
+    out.sampleRate = 48000.0;
+    out.resize (2, total);
+    for (int pos = 0; pos < total; pos += 512)
+    {
+        const int n = std::min (512, total - pos);
+        pcs::MidiEvent noteEvents[2];
+        int count = 0;
+        if (pos == 0)
+            noteEvents[count++] = { 0, pcs::MidiEvent::Type::NoteOn, note, 0.8f };
+        if (noteOff >= pos && noteOff < pos + n)
+            noteEvents[count++] = { noteOff - pos, pcs::MidiEvent::Type::NoteOff, note, 0.0f };
+        float* ch[] = { out.channels[0].data() + pos, out.channels[1].data() + pos };
+        offline.process (ch, 2, n, noteEvents, count);
+    }
+    return out;
+}
+
+void PCASynthProcessor::exportWav (const juce::File& file, int note, double seconds, std::function<void (juce::String)> done)
+{
+    const auto m = getModel();
+    const auto params = currentSynthParams();
+    const auto path = file.getFullPathName().toStdString();
+    auto flag = alive;
+    juce::Thread::launch ([m, params, note, seconds, path, flag, done = std::move (done)] {
+        juce::String error;
+        try
+        {
+            pcs::writeWav (path, renderNote (m, params, note, seconds), pcs::WavFormat::Pcm24);
+        }
+        catch (const std::exception& e)
+        {
+            error = e.what();
+        }
+        juce::MessageManager::callAsync ([flag, done, error] {
+            if (flag->load())
+                done (error);
+        });
+    });
 }
 
 void PCASynthProcessor::timerCallback() { collectGarbage(); }
@@ -171,6 +282,8 @@ void PCASynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         pcs::MidiEvent e;
         e.offset = meta.samplePosition;
         if (m.isNoteOn())
+            lastNote.store (m.getNoteNumber(), std::memory_order_relaxed);
+        if (m.isNoteOn())
             e = { e.offset, pcs::MidiEvent::Type::NoteOn, m.getNoteNumber(), m.getFloatVelocity() };
         else if (m.isNoteOff())
             e = { e.offset, pcs::MidiEvent::Type::NoteOff, m.getNoteNumber(), 0.0f };
@@ -188,6 +301,11 @@ void PCASynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
     synth.process (buffer.getArrayOfWritePointers(), buffer.getNumChannels(), buffer.getNumSamples(), events.data(),
                    static_cast<int> (events.size()));
     activeVoices.store (synth.activeVoiceCount(), std::memory_order_relaxed);
+    float positions[pcs::Synth::kMaxVoices];
+    const int n = synth.voicePositions (positions, pcs::Synth::kMaxVoices);
+    for (int i = 0; i < n; ++i)
+        voicePos[static_cast<size_t> (i)].store (positions[i], std::memory_order_relaxed);
+    numVoicePos.store (n, std::memory_order_relaxed);
 }
 
 juce::AudioProcessorEditor* PCASynthProcessor::createEditor() { return new PCASynthEditor (*this); }
@@ -241,6 +359,7 @@ void PCASynthProcessor::setStateInformation (const void* data, int sizeInBytes)
             d[static_cast<size_t> (j)] = std::bit_cast<float> (static_cast<uint32_t> (items[j].getHexValue64()));
         setDetail (d);
         parameters.replaceState (tree);
+        sendChangeMessage(); // the editor re-reads its settings (map axes, morph corners)
     }
 
     const auto blobLen = in.readInt64();

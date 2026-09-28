@@ -72,6 +72,15 @@ int Synth::activeVoiceCount() const noexcept
     return n;
 }
 
+int Synth::voicePositions (float* positions, int max) const noexcept
+{
+    int n = 0;
+    for (const auto& v : voices)
+        if (v.active && n < max)
+            positions[n++] = static_cast<float> (v.pos);
+    return n;
+}
+
 void Synth::process (float* const* out, int numChannels, int numSamples, const MidiEvent* events, int numEvents) noexcept
 {
     int e = 0;

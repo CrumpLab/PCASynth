@@ -4,6 +4,7 @@
 
 #include "pcs/Model.h"
 #include "pcs/Synth.h"
+#include "pcs/Wav.h"
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
@@ -58,14 +59,35 @@ public:
     bool isFactoryModel() const;
     static bool isModelFile (const juce::String& path) { return path.endsWithIgnoreCase (".pcsm"); }
 
-    // Moves the point to a training sound (PC1..16 parameters plus the detail
-    // components 17..32), or back to the centre of the space.
+    // The point in the space: PC1..16 parameters plus the detail components
+    // 17..32. setPoint writes all of them (PCs clamped to ±4); wrap drags in
+    // begin/endPointGesture so hosts record one automation gesture.
+    using Point = std::array<float, pcs::kMaxComponents>;
+    Point getPoint() const;
+    void setPoint (const Point& z);
+    void beginPointGesture();
+    void endPointGesture();
+    // Moves the point to a training sound, or back to the centre of the space.
     void jumpToSound (int index);
     void resetToMean();
-    std::array<float, pcs::kMaxComponents> getDetail() const noexcept;
+    Point getDetail() const noexcept;
 
-    // Smoothed point currently heard and voices sounding (for the editor).
+    // For the editor: voices sounding and where they are in the envelope.
     int getActiveVoices() const noexcept { return activeVoices.load(); }
+    int getVoicePositions (float* positions, int max) const noexcept;
+    int getLastNote() const noexcept { return lastNote.load(); }
+
+    // Renders one note at the current point and settings to a WAV file on a
+    // background thread; `done(error)` is called on the message thread.
+    void exportWav (const juce::File& file, int note, double seconds, std::function<void (juce::String)> done);
+    // The render behind exportWav: one note held until `seconds` minus the release (stereo, 48 kHz).
+    static pcs::AudioBuffer renderNote (std::shared_ptr<const pcs::Model> model, const pcs::SynthParams& params, int note,
+                                        double seconds);
+    pcs::SynthParams currentSynthParams() const { return reader.read (getDetail()); }
+
+    // Editor settings saved with the state (map axes, morph corners, ...).
+    juce::var getUiValue (const juce::Identifier& key, const juce::var& fallback) const;
+    void setUiValue (const juce::Identifier& key, const juce::var& value);
 
     // Frees a model the audio thread has let go of (the timer calls this).
     void collectGarbage() { delete retired.exchange (nullptr); }
@@ -75,7 +97,7 @@ public:
 private:
     void timerCallback() override;
     void setParamValue (const juce::String& id, float realValue);
-    void setDetail (const std::array<float, pcs::kMaxComponents>& d) noexcept;
+    void setDetail (const Point& d) noexcept;
 
     juce::AudioProcessorValueTreeState parameters;
     pcsplugin::ParamReader reader;
@@ -92,7 +114,10 @@ private:
     bool factory = true;
 
     std::array<std::atomic<float>, pcs::kMaxComponents> detail {};
-    std::atomic<int> activeVoices { 0 };
+    std::atomic<int> activeVoices { 0 }, lastNote { 60 };
+    std::array<std::atomic<float>, pcs::Synth::kMaxVoices> voicePos {};
+    std::atomic<int> numVoicePos { 0 };
+    std::shared_ptr<std::atomic<bool>> alive = std::make_shared<std::atomic<bool>> (true);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PCASynthProcessor)
 };

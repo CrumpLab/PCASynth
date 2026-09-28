@@ -1,5 +1,6 @@
 // Headless checks of the plugin: MIDI in -> sound out, jumping to training
 // sounds, and the state round trip with an embedded model.
+#include "../src/PluginEditor.h"
 #include "../src/PluginProcessor.h"
 #include "TrainingSet.h"
 
@@ -181,6 +182,55 @@ int main()
         e->collectGarbage(); // what the timer does on the message thread
     }
     check (finite, "model swaps during playback stay finite");
+
+    // ---- Stage 3: the point, the editor's tools, export ----
+    auto f = fresh();
+    PCASynthProcessor::Point pt {};
+    pt[0] = 1.5f;
+    pt[3] = -6.0f;  // clamped to -4 (a host parameter)
+    pt[20] = -6.0f; // detail: not clamped
+    f->setPoint (pt);
+    const auto got = f->getPoint();
+    check (near (got[0], 1.5f) && near (got[3], -4.0f) && near (got[20], -6.0f) && near (getParam (*f, "pc1"), 1.5f),
+           "setPoint writes PCs (clamped) and detail");
+
+    std::unique_ptr<juce::AudioProcessorEditor> editor (f->createEditor());
+    auto* ed = dynamic_cast<PCASynthEditor*> (editor.get());
+    check (ed != nullptr, "editor opens");
+    if (ed != nullptr)
+    {
+        const auto fm = f->getModel();
+        const auto corner = ed->getMorphPad().blend (0.0f, 0.0f);
+        const auto zc = fm->soundZ (0); // top-left defaults to the first sound
+        bool same = true;
+        for (size_t j = 0; j < zc.size(); ++j)
+            same = same && near (corner[j], zc[j]);
+        const auto mid = ed->getMorphPad().blend (0.5f, 0.5f);
+        check (same && ! near (mid[0], corner[0]), "morph pad: a corner is its sound, the centre a blend");
+
+        f->jumpToSound (fm->soundIndex ("bowed_2"));
+        ed->refresh();
+        const auto want = fm->decode (fm->soundZ (fm->soundIndex ("bowed_2")));
+        const auto& shown = ed->getEnvelopeView().levels();
+        bool match = shown.size() == want.db.size();
+        for (size_t i = 0; match && i < shown.size(); i += 97)
+            match = std::abs (shown[i] - want.db[i]) < 1e-3f;
+        check (match, "envelope view shows the decoded point");
+    }
+    editor.reset();
+
+    f->setUiValue ("mapX", 2);
+    juce::MemoryBlock uiState;
+    f->getStateInformation (uiState);
+    auto g2 = fresh();
+    g2->setStateInformation (uiState.getData(), static_cast<int> (uiState.getSize()));
+    check (static_cast<int> (g2->getUiValue ("mapX", 0)) == 2, "editor settings are saved with the state");
+
+    const auto wav = PCASynthProcessor::renderNote (f->getModel(), f->currentSynthParams(), 67, 2.0);
+    double sumSq = 0.0;
+    for (float x : wav.channels[1])
+        sumSq += x * x;
+    check (wav.numSamples() == 96000 && wav.numChannels() == 2 && sumSq > 1.0, "export renders a stereo note");
 
     std::printf (failures == 0 ? "all plugin checks passed\n" : "%d plugin checks FAILED\n", failures);
     return failures == 0 ? 0 : 1;

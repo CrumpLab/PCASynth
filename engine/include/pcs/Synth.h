@@ -84,6 +84,9 @@ public:
     void process (float* const* out, int numChannels, int numSamples, const MidiEvent* events, int numEvents) noexcept;
     void reset() noexcept;
     int activeVoiceCount() const noexcept;
+    // Where each sounding voice is in the envelope (frames), for displays.
+    // Returns how many were written (at most `max`).
+    int voicePositions (float* positions, int max) const noexcept;
     // Smoothed point currently heard.
     const std::array<float, kMaxComponents>& currentZ() const noexcept { return zSmooth; }
 

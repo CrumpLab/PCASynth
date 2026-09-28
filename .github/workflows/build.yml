@@ -44,7 +44,8 @@ jobs:
       - name: Editor snapshot
         run: |
           mkdir -p ui
-          xvfb-run -a build/plugin/pcs-ui-snapshot ui/editor.png 760 700 vowel_1
+          xvfb-run -a build/plugin/pcs-ui-snapshot ui/editor.png 1180 840 vowel_1
+          xvfb-run -a build/plugin/pcs-ui-snapshot ui/editor-morph.png 1180 840 x 0.3 0.7
 
       - name: Train on the synthetic set and render examples
         run: scripts/render_examples.sh build renders

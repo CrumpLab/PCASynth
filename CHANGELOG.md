@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.3.0] - 2026-09-28
+
+### Stage 3: custom UI
+- **Sound map:** training sounds on any two components. Click a sound to jump
+  to it; drag to move the point.
+- **Morph pad:** four corner sounds, blended over all components.
+- **Envelope view:** harmonics × time heat map of the current point, with
+  loop/scan markers and voice playheads.
+- **Component strip:** PC1–PC16 sliders with variance-explained bars.
+- Grouped knobs for every other parameter; times shown in ms below 1 s.
+- **Export WAV…** of the current point.
+- Moves from the map and pad are recorded as automation gestures. Map axes
+  and morph corners are saved with the state.
+
 ## [0.2.0] - 2026-09-28
 
 ### Stage 2: plugin v1

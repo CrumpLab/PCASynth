@@ -1,0 +1,44 @@
+#pragma once
+
+#include "PluginProcessor.h"
+
+#include <juce_gui_basics/juce_gui_basics.h>
+
+// The training sounds plotted on two chosen components (SD units). Click a
+// sound to jump to it; drag anywhere else to move the point along the two
+// axes (the other components stay where they are).
+class SoundMap final : public juce::Component
+{
+public:
+    explicit SoundMap (PCASynthProcessor& p);
+
+    void setModel (std::shared_ptr<const pcs::Model> model);
+    void refresh(); // repaints when the point has moved
+
+    void paint (juce::Graphics&) override;
+    void resized() override;
+    void mouseMove (const juce::MouseEvent&) override;
+    void mouseExit (const juce::MouseEvent&) override;
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
+
+private:
+    juce::Rectangle<float> plotArea() const;
+    juce::Point<float> toScreen (float zx, float zy) const;
+    juce::Point<float> toSpace (juce::Point<float> screen) const;
+    int soundAt (juce::Point<float> screen) const;
+    void moveTo (juce::Point<float> screen);
+    void axesChanged();
+
+    PCASynthProcessor& processor;
+    std::shared_ptr<const pcs::Model> model;
+    std::vector<std::vector<float>> soundZ;
+    juce::ComboBox xAxis, yAxis;
+    juce::Label xLabel { {}, "X" }, yLabel { {}, "Y" };
+    int ax = 0, ay = 1;
+    float range = 3.0f;
+    PCASynthProcessor::Point point {};
+    int hover = -1;
+    bool dragging = false;
+};

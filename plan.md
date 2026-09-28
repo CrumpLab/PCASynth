@@ -6,8 +6,8 @@ of WAVs of different instruments all playing the same note. It learns the
 space those sounds span, and you play any point in that space: the training
 sounds themselves, morphs between them, or places no instrument has been.
 
-> **Status:** Stages 1 and 2 are built: the engine, the offline tools and a
-> playable VST3. Decisions are recorded in §6. Licence: open source (AGPLv3, following JUCE's open-source
+> **Status:** Stages 1–3 are built: the engine, the offline tools and a
+> playable VST3 with its own UI. Decisions are recorded in §6. Licence: open source (AGPLv3, following JUCE's open-source
 > licence).
 
 ---
@@ -172,7 +172,7 @@ Each stage ends with something to **hear**.
   within a note, PC1–PC4 sweeps, melodies across 3 octaves, a chord pad
   wandering through the space, the space's extremes, and envelope scans.
 
-### Stage 2: Plugin v1 — done, awaiting a play in a DAW
+### Stage 2: Plugin v1 — done
 - JUCE plugin: VST3 + Standalone (for testing without a DAW), universal
   macOS (arm64 + x86_64).
 - **Factory model built in:** the synthetic set is generated and trained by
@@ -200,7 +200,7 @@ Each stage ends with something to **hear**.
   If an embedded model is damaged, the parameters still load and the
   factory space returns.
 - Editor: a model bar (load, factory, model summary, jump to, centre) above
-  JUCE's generic parameter panel.
+  JUCE's generic parameter panel (replaced in Stage 3).
 - Tests (headless):
   - A note sounds and stops after its release.
   - Jumping sets the coordinates.
@@ -215,14 +215,42 @@ Each stage ends with something to **hear**.
   examples.
 - **Done when:** you play it in your DAW from a CI build.
 
-### Stage 3: Custom UI
-- **Sound map:** training sounds plotted on any two components. Drag a cursor
-  to move through the space, and click a sound to jump to it.
-- **Morph pad:** pick sounds A and B (or four corners) and blend.
-- **Envelope view:** the current point's harmonics × time as a heat map, with
-  loop and scan markers.
-- Variance-explained bars on the component sliders.
-- **Export current point as WAV** (any note, any length).
+### Stage 3: Custom UI — done, awaiting a play in a DAW
+- **Sound map:** the training sounds on any two components (X/Y menus list
+  every component with its % of variance).
+  - Hover a sound for its name and coordinates. Click it to jump there.
+  - Drag anywhere else to move the point along the two axes; the other
+    components stay put.
+  - The point is an orange ring with crosshairs.
+- **Morph pad:** four corner sounds, chosen from menus. Dragging the puck
+  blends their coordinates bilinearly over all 32 components; along an edge
+  it is a straight morph between two sounds.
+- **Envelope view:** the current point decoded as a harmonics × time heat map.
+  - It shows what the synth plays: Exaggerate and Components Used are
+    applied.
+  - Sequential blue ramp from −60 dB (receding into the background) to 0 dB,
+    with a legend.
+  - Loop region (dashed, outside dimmed) or scan position, and an orange
+    playhead per sounding voice.
+- **Component strip:** PC1–PC16 as vertical sliders filling from 0 (the
+  mean), each with a bar and % showing the variance it explains. Sliders
+  beyond the model's components or Components Used are dimmed. Double-click
+  returns a slider to 0.
+- **Knobs** for everything else, grouped: Point, Playback (with the Play
+  Mode menu), Voice, Play. Times show in ms below one second.
+- **Export WAV…** renders one note (the last note played, default C4) at the
+  current point and settings, on a background thread.
+- Every tool moves the point by writing the PC parameters plus the detail
+  components. Drags are wrapped in one automation gesture, so the host
+  records and replays them.
+- Map axes, morph corners and the puck position are saved with the state.
+- Tests:
+  - `setPoint` clamping and detail.
+  - The morph pad: a corner is its sound, the centre is a blend.
+  - The envelope view shows the decoded point.
+  - Editor settings round-trip through the state.
+  - Export renders a stereo note.
+  - pluginval still passes at strictness 10.
 
 ### Stage 4: Training inside the plugin
 - Drop a folder of WAVs on the window. Analysis and PCA run on a background

@@ -24,9 +24,14 @@ juce_add_plugin(PCASynth
 )
 
 target_sources(PCASynth PRIVATE
+    src/Controls.cpp
+    src/EnvelopeView.cpp
+    src/MorphPad.cpp
     src/Params.cpp
     src/PluginEditor.cpp
     src/PluginProcessor.cpp
+    src/SoundMap.cpp
+    src/Theme.cpp
 )
 
 # The factory model: the synthetic training set, generated and trained at

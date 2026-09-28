@@ -13,10 +13,15 @@ bank of sine oscillators, so any pitch plays the learned timbre. See
 
 By [Matthew Crump](https://crumplab.com), Brooklyn College of CUNY.
 
-**Status: Stage 2 (version 0.2.0).** A playable VST3 (plus a Standalone
-app) with a built-in space of 60 synthetic instrument notes. You can load
-your own models, and a model is saved inside your DAW project. It has not
-yet been played in a DAW. The custom UI (sound map, morph pad) is Stage 3.
+**Status: Stage 3 (version 0.3.0).** A playable VST3 (plus a Standalone
+app) with its own UI:
+- a map of the sound space,
+- a four-corner morph pad,
+- a live view of the harmonics at the current point,
+- the component sliders.
+
+It has a built-in space of 60 synthetic instrument notes, and you can load
+your own. It has not yet been played in a DAW.
 
 ![The plugin window](docs/screenshot.png)
 
@@ -36,18 +41,31 @@ instrument. The zip also has a Standalone app for trying it without a DAW.
 
 ## Playing it
 
-- **Jump to** picks a training sound. The PC sliders move to its coordinates,
-  and from there you can move away along any component.
-- **PC1–PC16** are the point in the space, in standard deviations of the
-  training sounds. ±2 covers most of the set; ±4 goes beyond it.
+- **Sound map** (left): every training sound on two components (pick them
+  under the map).
+  - Click a dot to jump to that sound.
+  - Drag anywhere else to move the point (orange ring) along those two
+    components.
+- **Morph** (middle): choose four sounds for the corners and drag the puck to
+  blend them. Along one edge it morphs between two sounds.
+- **Harmonics over time** (right): what the current point sounds like.
+  - Each row is a harmonic (1 at the bottom); brighter is louder.
+  - Dashed lines mark the loop; orange lines are the voices playing.
+- **Components**: PC1–PC16 in standard deviations from the average sound
+  (±2 covers most of the training set; ±4 goes beyond it). The bar above
+  each shows how much of the variety in the training set that component
+  captures. Double-click a slider to reset it.
 - **Play Mode:**
   - **Loop** (default) sustains held notes between Loop Start and Loop End.
   - **One-shot** plays the recorded envelope once.
   - **Ping-pong** plays back and forth between the loop points.
-  - **Scan** holds one moment of the sound (automate Scan Position).
+  - **Scan** holds one moment of the sound (automate Scan).
 - **Exaggerate** scales the whole point (0 = the average sound, 2 = twice as
-  far out). **Components Used** keeps only the first K components.
-- **Load Model…** or drop a `.pcsm` file on the window to play your own space.
+  far out). **Components** keeps only the first K.
+- **Jump to** / **Centre** go to a training sound or the average.
+  **Export WAV…** renders the last note you played at the current point.
+- **Load Model…** or drop a `.pcsm` file on the window to play your own
+  space. It is saved inside your project.
 
 ## Build
 
