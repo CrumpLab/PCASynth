@@ -4,6 +4,7 @@
 
 #include "pcs/Harmonic.h"
 #include "pcs/Model.h"
+#include "pcs/WaveModel.h"
 #include "pcs/Wav.h"
 
 #include <cmath>
@@ -33,6 +34,12 @@ void usage()
                  "  --no-sharp-attacks  analyse onsets with the same long window as the rest\n"
                  "  --attack S        length of the sharp-attack part (default 0.15 s)\n"
                  "  --no-normalize    keep each sound's own loudness\n"
+                 "waveform spaces (PCAWave): PCA on the waveforms themselves, written as .pcsw\n"
+                 "  --waveform        train a waveform space (--note, --duration, --components,\n"
+                 "                    --no-normalize and --no-trim apply)\n"
+                 "  --rate HZ         the waveform space's sample rate (default 48000)\n"
+                 "  --no-align-pitch  keep each sound at its own pitch\n"
+                 "  --no-align-phase  don't shift sounds to line up their waveforms\n"
                  "  --no-trim         don't align sounds on their onsets\n";
 }
 } // namespace
@@ -42,6 +49,8 @@ int main (int argc, char** argv)
     pcs::AnalysisSettings s;
     int components = pcs::kMaxComponents;
     std::string outPath, title;
+    bool waveform = false, durationSet = false;
+    pcs::WaveSettings ws;
     std::vector<std::string> inputs;
     for (int i = 1; i < argc; ++i)
     {
@@ -57,7 +66,11 @@ int main (int argc, char** argv)
             else
                 s.midiNote = std::stoi (v);
         }
-        else if (a == "--duration") s.duration = std::stod (next());
+        else if (a == "--duration") { s.duration = std::stod (next()); durationSet = true; }
+        else if (a == "--waveform") waveform = true;
+        else if (a == "--rate") ws.sampleRate = std::stod (next());
+        else if (a == "--no-align-pitch") ws.alignPitch = false;
+        else if (a == "--no-align-phase") ws.alignPhase = false;
         else if (a == "--harmonics") s.harmonics = std::stoi (next());
         else if (a == "--frame-rate") s.frameRate = std::stod (next());
         else if (a == "--no-pitch-curve") s.trackPitch = false;
@@ -86,6 +99,47 @@ int main (int argc, char** argv)
     {
         usage();
         return 2;
+    }
+
+    if (waveform)
+    {
+        ws.midiNote = s.midiNote;
+        ws.autoPitch = s.autoPitch;
+        if (durationSet)
+            ws.duration = s.duration;
+        ws.normalizeLoudness = s.normalizeLoudness;
+        ws.trimOnset = s.trimOnset;
+        try
+        {
+            std::vector<pcs::AudioBuffer> audio;
+            std::vector<std::string> names;
+            for (const auto& path : pcs::tools::collectWavs (inputs))
+            {
+                audio.push_back (pcs::readWav (path));
+                names.push_back (pcs::tools::stem (path));
+            }
+            auto model = pcs::trainWaveModel (audio, names, ws, components);
+            model.title = title.empty() ? pcs::tools::stem (outPath) : title;
+            pcs::saveSpace (model, outPath);
+            for (int i = 0; i < model.numSounds(); ++i)
+                std::printf ("  %-24s f0 %8.2f Hz  shift %+3d  residual %6.1f dB\n", model.names[static_cast<size_t> (i)].c_str(),
+                             model.f0s[static_cast<size_t> (i)], model.shifts[static_cast<size_t> (i)], model.fitErrorDb[static_cast<size_t> (i)]);
+            std::printf ("\n%d sounds, %d samples at %.0f Hz (common pitch %.2f Hz), %d components\n", model.numSounds(),
+                         model.numSamples, model.sampleRate, model.refHz, model.numComponents());
+            double cumulative = 0.0;
+            for (int j = 0; j < model.numComponents(); ++j)
+            {
+                cumulative += model.varianceExplained (j);
+                std::printf ("  PC%-3d %5.1f %%   (cumulative %5.1f %%)\n", j + 1, 100.0 * model.varianceExplained (j), 100.0 * cumulative);
+            }
+            std::cout << "\nwrote " << outPath << "\n";
+        }
+        catch (const std::exception& e)
+        {
+            std::cerr << "pcs-train: " << e.what() << "\n";
+            return 1;
+        }
+        return 0;
     }
 
     try

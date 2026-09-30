@@ -25,6 +25,7 @@ void usage()
                  "  analysis  original vs its analysis played back (what the harmonic model loses)\n"
                  "  model     original vs the model at the sound's point (everything)\n"
                  "  pca       analysis vs model (what the PCA loses); env = the same on the envelopes\n"
+                 "            (waveform spaces: analysis = the aligned sound the PCA saw; env = its residual, dB)\n"
                  "  ...@att   the same over the first 150 ms\n";
 }
 } // namespace
@@ -51,7 +52,8 @@ int main (int argc, char** argv)
     }
     try
     {
-        const auto model = pcs::loadModel (argv[1]);
+        const std::shared_ptr<const pcs::Space> space = pcs::loadSpace (argv[1]);
+        const auto& model = *space;
         std::map<std::string, std::string> files;
         for (const auto& f : pcs::tools::collectWavs (inputs))
             files[pcs::tools::stem (f)] = f;
@@ -70,7 +72,7 @@ int main (int argc, char** argv)
                 std::printf ("%-18s (no file)\n", name.c_str());
                 continue;
             }
-            const auto r = pcs::inspectSound (model, i, pcs::readWav (it->second), options);
+            const auto r = pcs::inspectSound (space, i, pcs::readWav (it->second), options);
             std::printf ("%-18s %6.1f %9.2f %9.2f %9.2f %9.2f %7.2f %7.2f\n", name.c_str(), r.pitch, r.analysisError,
                          r.analysisAttackError, r.modelError, r.modelAttackError, r.pcaError, r.envelopeError);
             const double v[6] = { r.analysisError, r.analysisAttackError, r.modelError, r.modelAttackError, r.pcaError, r.envelopeError };

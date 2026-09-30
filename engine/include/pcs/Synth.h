@@ -2,6 +2,7 @@
 
 #include "pcs/Model.h"
 #include "pcs/Modulation.h"
+#include "pcs/WaveModel.h"
 
 #include <array>
 #include <cstdint>
@@ -90,7 +91,12 @@ public:
     // audio thread so a model can be swapped in without allocating.
     struct ModelSlot
     {
-        std::shared_ptr<const Model> model;
+        std::shared_ptr<const Model> model;      // a harmonic space, or ...
+        std::shared_ptr<const WaveModel> wave;   // ... a waveform space
+        // Waveform space: per sample, the mean and each component's loading
+        // (component × SD), tableWidth floats (a multiple of kLanes, zero-padded).
+        std::vector<float> table;
+        int tableWidth = 0;
         std::vector<float> cache;       // numFrames × numHarmonics, linear amplitude
         std::vector<float> noiseCache;  // numFrames × numNoiseBands, linear RMS
         std::vector<uint32_t> stamps;   // per frame: point the cache was decoded for
@@ -99,16 +105,21 @@ public:
         Point relSd {};                 // each component's SD relative to PC1
         float refLevelDb = 0.0f;        // the training sounds' average Model::levelDb (for Level Lock)
     };
-    static std::unique_ptr<ModelSlot> makeSlot (std::shared_ptr<const Model> model); // allocates
+    static std::unique_ptr<ModelSlot> makeSlot (std::shared_ptr<const Space> space); // allocates
 
     // Not real-time safe (allocates).
     void prepare (double sampleRate);
-    void setModel (std::shared_ptr<const Model> model);
+    void setModel (std::shared_ptr<const Space> space);
 
     // Real-time safe: installs `slot` (sounding notes stop) and hands back
     // the previous slot in `slot`, to be destroyed off the audio thread.
     void swapModel (std::unique_ptr<ModelSlot>& slot) noexcept;
-    const Model* model() const noexcept { return current != nullptr ? current->model.get() : nullptr; }
+    const Model* model() const noexcept { return current != nullptr ? current->model.get() : nullptr; }     // harmonic
+    const WaveModel* waveModel() const noexcept { return current != nullptr ? current->wave.get() : nullptr; }
+    const Space* space() const noexcept
+    {
+        return model() != nullptr ? static_cast<const Space*> (model()) : static_cast<const Space*> (waveModel());
+    }
 
     // Real-time safe.
     void setParams (const SynthParams& p) noexcept { params = p; }
@@ -117,7 +128,8 @@ public:
     void process (float* const* out, int numChannels, int numSamples, const MidiEvent* events, int numEvents) noexcept;
     void reset() noexcept;
     int activeVoiceCount() const noexcept;
-    // Where each sounding voice is in the envelope (frames), for displays.
+    // Where each sounding voice is in the envelope (frames; waveform spaces:
+    // samples at the model's rate), for displays.
     // Returns how many were written (at most `max`).
     int voicePositions (float* positions, int max) const noexcept;
     // Smoothed point set by the parameters (home), and the point heard after
@@ -184,6 +196,10 @@ private:
         std::array<float, kMaxNoiseBands> ownN0 {}, ownN1 {};
         int ownT0 = -1, ownRefresh = 0;
         float levelGain = 1.0f, levelTarget = 1.0f; // Level Lock at the voice's own point
+        // Waveform voices: the mixing weights last used (mean, then z), and the level last used.
+        alignas (32) std::array<float, kMaxComponents + kLanes> waveW {};
+        bool waveStarted = false;
+        float waveLevel = 0.0f;
         uint32_t levelTick = 0;
     };
 
@@ -196,6 +212,8 @@ private:
     float pitchCurveAt (const Voice& v, double pos) const noexcept; // cents, Pitch Envelope applied
     void render (float* out, int n) noexcept;
     void renderVoice (Voice& v, int n) noexcept;
+    void renderWaveVoice (Voice& v, int n) noexcept;
+    double lastPosition() const noexcept; // the envelope's last position (frames, or samples)
     int frame (int t) noexcept; // decodes frame t at the heard point into the caches (once per point); returns t clamped
     // Linear harmonic amplitudes (and noise band RMS, if `noise`) at envelope position `pos`.
     // `cached`: a voice's own point may come from its cache (see Voice::own0).

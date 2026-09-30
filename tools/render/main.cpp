@@ -119,7 +119,7 @@ int main (int argc, char** argv)
             else { usage(); return 2; }
         }
 
-        auto model = std::make_shared<pcs::Model> (pcs::loadModel (modelPath));
+        std::shared_ptr<const pcs::Space> model = pcs::loadSpace (modelPath);
         auto soundZ = [&] (const std::string& name) {
             const int i = model->soundIndex (name);
             if (i < 0)

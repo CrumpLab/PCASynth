@@ -7,7 +7,7 @@
 //   pcs-ui-snapshot out.png width height mpe     (MPE tab, three notes with their own expression)
 #include "../src/PluginEditor.h"
 #include "../src/PluginProcessor.h"
-#include "../src/Presets.h"
+#include "Presets.h"
 #include "TrainingSet.h"
 #include "pcs/Wav.h"
 
@@ -93,7 +93,7 @@ int main (int argc, char** argv)
     else if (argc > 4 && juce::String (argv[4]).startsWith ("preset:"))
     {
         const auto name = juce::String (argv[4]).fromFirstOccurrenceOf ("preset:", false, false);
-        const auto& presets = pcsplugin::factoryPresets();
+        const auto& presets = processor.getFactoryPresets();
         for (size_t i = 0; i < presets.size(); ++i)
             if (presets[i].name == name)
                 processor.loadFactoryPreset (static_cast<int> (i));

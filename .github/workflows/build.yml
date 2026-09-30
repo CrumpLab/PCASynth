@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   linux:
-    name: Linux (tests, VST3 + pluginval, listening examples)
+    name: Linux (tests, VST3 + pluginval for both plugins, listening examples)
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -34,17 +34,21 @@ jobs:
       - name: Unit and plugin tests
         run: xvfb-run -a ctest --test-dir build --output-on-failure
 
-      - name: pluginval (VST3)
+      - name: pluginval (VST3, both plugins)
         run: |
           curl -sSfL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Linux.zip
           unzip -q pluginval.zip
           xvfb-run -a ./pluginval --strictness-level 10 --validate-in-process \
             "build/plugin/PCASynth_artefacts/Release/VST3/PCASynth.vst3"
+          xvfb-run -a ./pluginval --strictness-level 10 --validate-in-process \
+            "build/plugin-wave/PCAWave_artefacts/Release/VST3/PCAWave.vst3"
 
       - name: CPU benchmark (informational)
-        run: build/tools/pcs-bench build/plugin/factory/synthetic.pcsm 5
+        run: |
+          build/tools/pcs-bench build/plugin/factory/synthetic.pcsm 5
+          build/tools/pcs-bench build/plugin-wave/factory/synthetic.pcsw 5
 
-      - name: Editor snapshot
+      - name: Editor snapshots
         run: |
           mkdir -p ui
           xvfb-run -a build/plugin/pcs-ui-snapshot ui/editor.png 1180 840 "preset:Vowel Choir"
@@ -54,6 +58,10 @@ jobs:
           xvfb-run -a build/plugin/pcs-ui-snapshot ui/editor-mod.png 1180 840 mod
           xvfb-run -a build/plugin/pcs-ui-snapshot ui/editor-mpe.png 1180 840 mpe
           xvfb-run -a build/plugin/pcs-ui-snapshot ui/editor-inspect.png 1180 840 inspect vowel_2
+          xvfb-run -a build/plugin-wave/pcs-wave-snapshot ui/pcawave.png 1180 840 "preset:Reed Into Vowel"
+          xvfb-run -a build/plugin-wave/pcs-wave-snapshot ui/pcawave-mix.png 1180 840 mix
+          xvfb-run -a build/plugin-wave/pcs-wave-snapshot ui/pcawave-train.png 1180 840 train
+          xvfb-run -a build/plugin-wave/pcs-wave-snapshot ui/pcawave-inspect.png 1180 840 inspect vowel_2
 
       - name: Train on the synthetic set and render examples
         run: scripts/render_examples.sh build renders
@@ -65,6 +73,8 @@ jobs:
             renders/examples
             renders/training.txt
             renders/inspect.txt
+            renders/training-wave.txt
+            renders/inspect-wave.txt
             renders/synthetic.pcsm
             renders/synthetic.pcsm.scores.csv
           retention-days: 14
@@ -76,7 +86,7 @@ jobs:
           retention-days: 14
 
   macos:
-    name: macOS (universal VST3 + Standalone, pluginval, package)
+    name: macOS (universal VST3 + Standalone for both plugins, pluginval, package)
     runs-on: macos-14
     env:
       # Optional (repository secrets): Developer ID signing and notarization.
@@ -103,18 +113,23 @@ jobs:
       - name: Unit and plugin tests
         run: ctest --test-dir build --output-on-failure
 
-      - name: Check universal binary and ad-hoc sign
+      - name: Check universal binaries and ad-hoc sign
         run: |
-          ART="build/plugin/PCASynth_artefacts/Release"
-          lipo -info "$ART/VST3/PCASynth.vst3/Contents/MacOS/PCASynth"
-          codesign --force --deep --sign - "$ART/VST3/PCASynth.vst3"
+          for P in plugin/PCASynth plugin-wave/PCAWave; do
+            NAME="$(basename "$P")"
+            ART="build/${P}_artefacts/Release"
+            lipo -info "$ART/VST3/$NAME.vst3/Contents/MacOS/$NAME"
+            codesign --force --deep --sign - "$ART/VST3/$NAME.vst3"
+          done
 
-      - name: pluginval (VST3)
+      - name: pluginval (VST3, both plugins)
         run: |
           curl -sSfL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip
           unzip -q pluginval.zip
           pluginval.app/Contents/MacOS/pluginval --strictness-level 10 --validate-in-process \
             "build/plugin/PCASynth_artefacts/Release/VST3/PCASynth.vst3"
+          pluginval.app/Contents/MacOS/pluginval --strictness-level 10 --validate-in-process \
+            "build/plugin-wave/PCAWave_artefacts/Release/VST3/PCAWave.vst3"
 
       - name: Import signing certificates
         if: env.MACOS_CERTS_P12 != ''
@@ -130,19 +145,21 @@ jobs:
           security list-keychains -d user -s build.keychain login.keychain
           rm certs.p12
 
-      - name: Package (zip + installer)
+      - name: Package (zip + installer, each plugin)
         run: |
           # Notarizing takes minutes: only for releases (tags v*). Other builds are still signed when the secrets exist.
           if [[ "$GITHUB_REF" != refs/tags/v* ]]; then unset APPLE_ID; fi
-          scripts/package_macos.sh build/plugin/PCASynth_artefacts/Release dist
+          scripts/package_macos.sh build/plugin/PCASynth_artefacts/Release dist PCASynth
+          scripts/package_macos.sh build/plugin-wave/PCAWave_artefacts/Release dist PCAWave
 
       - name: Check signatures
         run: |
-          mkdir -p check && cd check
-          ditto -x -k ../dist/*.zip .
-          codesign --verify --deep --strict --verbose=2 PCASynth.vst3 PCASynth.app
-          pkgutil --check-signature ../dist/*.pkg || true
-          if [[ -n "$MACOS_SIGN_APP" ]]; then spctl --assess --type execute --verbose PCASynth.app || true; fi
+          for NAME in PCASynth PCAWave; do
+            mkdir -p "check/$NAME" && ditto -x -k dist/$NAME-*-macOS.zip "check/$NAME"
+            codesign --verify --deep --strict --verbose=2 "check/$NAME/$NAME.vst3" "check/$NAME/$NAME.app"
+            pkgutil --check-signature dist/$NAME-*-macOS.pkg || true
+            if [[ -n "$MACOS_SIGN_APP" ]]; then spctl --assess --type execute --verbose "check/$NAME/$NAME.app" || true; fi
+          done
 
       - name: Remove signing keychain
         if: always() && env.MACOS_CERTS_P12 != ''
@@ -151,7 +168,13 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: PCASynth-macOS
-          path: dist/*
+          path: dist/PCASynth-*
+          retention-days: 30
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PCAWave-macOS
+          path: dist/PCAWave-*
           retention-days: 30
 
   release:
@@ -166,8 +189,9 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: PCASynth-macOS
+          pattern: "*-macOS"
           path: dist
+          merge-multiple: true
 
       - name: Create release
         env:
@@ -177,4 +201,4 @@ jobs:
           awk -v v="$VERSION" '$0 ~ "^## \\[?" v {on=1; next} on && /^## / {exit} on {print}' CHANGELOG.md > notes.md
           PRE=""
           case "$VERSION" in 0.*) PRE="--prerelease" ;; esac
-          gh release create "$GITHUB_REF_NAME" dist/* --title "PCASynth $VERSION" --notes-file notes.md $PRE
+          gh release create "$GITHUB_REF_NAME" dist/* --title "PCASynth and PCAWave $VERSION" --notes-file notes.md $PRE

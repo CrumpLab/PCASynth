@@ -93,7 +93,7 @@ TEST_CASE ("Pitch curves: analysis follows vibrato, and the synth plays it back"
     // The synth replays it: a single-sound model rendered and re-analysed has the same curve.
     const auto m = singleSoundModel (a, s);
     CHECK (m.hasPitchCurve);
-    const auto again = analyseHarmonics (renderPoint (m, {}, 57.0, 48000.0), s, "again");
+    const auto again = analyseHarmonics (renderPoint (std::make_shared<const Model> (m), {}, 57.0, 48000.0), s, "again");
     const std::vector<float> back (again.pitchCents.begin() + 10, again.pitchCents.end() - 10);
     CHECK (correlation (back, want) > 0.9);
     // Pitch Envelope 0 plays it steady.

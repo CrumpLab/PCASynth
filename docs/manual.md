@@ -1,6 +1,6 @@
 # PCASynth manual
 
-Version 0.9.0 · [Matthew Crump](https://crumplab.com), Brooklyn College of CUNY
+Version 0.10.0 · [Matthew Crump](https://crumplab.com), Brooklyn College of CUNY
 
 PCASynth is a synthesizer that plays **a space of sounds learned from
 recordings**. Give it a set of notes from different instruments and it
@@ -10,6 +10,8 @@ places no instrument has been.
 
 This manual covers every part of the plugin. For installing and building,
 see the [README](../README.md); for the design, see [plan.md](../plan.md).
+Its sister plugin, **PCAWave**, runs the PCA on the waveforms themselves
+(a linear morph synth); it has [its own manual](manual-pcawave.md).
 
 - [1. How it works](#1-how-it-works)
 - [2. Quick start](#2-quick-start)

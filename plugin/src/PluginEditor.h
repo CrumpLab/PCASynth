@@ -1,83 +1,17 @@
 #pragma once
 
-#include "Controls.h"
 #include "EnvelopeView.h"
-#include "InspectPanel.h"
-#include "MorphPad.h"
-#include "ParamGrid.h"
 #include "PluginProcessor.h"
-#include "PresetBar.h"
-#include "SoundMap.h"
-#include "Theme.h"
-#include "TrainPanel.h"
+#include "SpaceEditor.h"
 
-#include <juce_audio_utils/juce_audio_utils.h>
-
-// The plugin window: a model bar, the sound map, the morph pad, the envelope
-// view of the current point, the component sliders and the other controls.
-class PCASynthEditor final : public juce::AudioProcessorEditor,
-                             public juce::FileDragAndDropTarget,
-                             private juce::ChangeListener,
-                             private juce::Timer
+// PCASynth's window: the shared editor, with the harmonics-over-time view of
+// the current point.
+class PCASynthEditor final : public SpaceEditor
 {
 public:
-    explicit PCASynthEditor (PCASynthProcessor&);
-    ~PCASynthEditor() override;
+    explicit PCASynthEditor (PCASynthProcessor& p);
+    EnvelopeView& getEnvelopeView() noexcept { return static_cast<EnvelopeView&> (getPointView()); }
 
-    void paint (juce::Graphics&) override;
-    void paintOverChildren (juce::Graphics&) override;
-    void resized() override;
-
-    bool isInterestedInFileDrag (const juce::StringArray& files) override;
-    void fileDragExit (const juce::StringArray&) override;
-    void filesDropped (const juce::StringArray& files, int, int) override;
-
-    void refreshModel();
-    void refresh(); // what the timer does: follow the point, voices, status
-    juce::String getStatus() const { return status.getText(); }
-    SoundMap& getSoundMap() noexcept { return soundMap; }
-    MorphPad& getMorphPad() noexcept { return morphPad; }
-    EnvelopeView& getEnvelopeView() noexcept { return envelope; }
-    TrainPanel& getTrainPanel() noexcept { return trainPanel; }
-    InspectPanel& getInspectPanel() noexcept { return inspectPanel; }
-    void showInspector (bool show);
-    void showTraining (bool show);
-    PresetBar& getPresetBar() noexcept { return presetBar; }
-    void selectTab (int index) { showTab (index); }
-
-private:
-    void changeListenerCallback (juce::ChangeBroadcaster*) override { refreshModel(); }
-    void timerCallback() override { refresh(); }
-    void chooseModelFile();
-    void chooseExportFile();
-    void chooseSaveFile();
-    void showMessage (const juce::String& text);
-
-    PCASynthProcessor& processor;
-    theme::LookAndFeel lookAndFeel;
-    juce::TooltipWindow tooltips { this, 600 };
-    juce::TextButton loadButton { "Load Model..." }, factoryButton { "Factory Space" }, exportButton { "Export WAV..." },
-        meanButton { "Centre" }, trainToggle { "Train..." }, inspectToggle { "Inspect..." }, saveButton { "Save Model..." };
-    juce::Label title, modelInfo, jumpLabel { {}, "Jump to" }, status;
-    juce::ComboBox soundBox;
-    PresetBar presetBar;
-    SoundMap soundMap;
-    MorphPad morphPad;
-    EnvelopeView envelope;
-    ComponentStrip strip;
-    ControlPanel controls;
-    TrainPanel trainPanel;
-    InspectPanel inspectPanel;
-    void updateVisibility(); // the main views, or the Train / Inspect panel over them
-    WalkPanel walkPanel;
-    ModPanel modPanel;
-    MpePanel mpePanel;
-    std::array<juce::TextButton, 4> tabs { juce::TextButton ("Components"), juce::TextButton ("Random Walk"),
-                                           juce::TextButton ("LFOs & Expression"), juce::TextButton ("MPE") };
-    void showTab (int index);
-    std::unique_ptr<juce::FileChooser> chooser;
-    juce::int64 messageUntil = 0;
-    bool dragging = false;
-
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PCASynthEditor)
+protected:
+    juce::String describeSpace (const pcs::Space& space) const override;
 };

@@ -14,7 +14,9 @@ add_library(pcs_engine STATIC
     src/Model.cpp
     src/Modulation.cpp
     src/Pca.cpp
+    src/Space.cpp
     src/Synth.cpp
+    src/WaveModel.cpp
     src/Wav.cpp
 )
 add_library(pcs::engine ALIAS pcs_engine)

@@ -3,9 +3,10 @@
 # manual, and an installer (.pkg) that puts the VST3 in /Library/Audio/Plug-Ins/VST3
 # and (optionally) the Standalone app in /Applications.
 #
-#   scripts/package_macos.sh <artefacts dir> <output dir>
+#   scripts/package_macos.sh <artefacts dir> <output dir> [PCASynth | PCAWave]
 #
 # e.g. scripts/package_macos.sh build/plugin/PCASynth_artefacts/Release dist
+#      scripts/package_macos.sh build/plugin-wave/PCAWave_artefacts/Release dist PCAWave
 #
 # Signing is optional and driven by the environment:
 #   MACOS_SIGN_APP        "Developer ID Application: Name (TEAMID)"  -> codesign the bundles
@@ -20,9 +21,18 @@ mkdir -p "${2:?output dir}"
 OUT="$(cd "$2" && pwd)"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION="$(sed -n 's/^project(PCASynth VERSION \([0-9.]*\).*/\1/p' "$ROOT/CMakeLists.txt")"
-NAME="PCASynth"
-ID="com.crumplab.pcasynth"
-STEM="PCASynth-$VERSION-macOS"
+NAME="${3:-PCASynth}"
+ID="com.crumplab.$(echo "$NAME" | tr '[:upper:]' '[:lower:]')"
+STEM="$NAME-$VERSION-macOS"
+if [[ "$NAME" == "PCAWave" ]]; then
+    MANUAL="manual-pcawave.md"
+    SHOTS=("$ROOT"/docs/pcawave*.png)
+    ABOUT="A synthesizer that plays points in a PCA space of recorded waveforms: every point a mix of the training sounds."
+else
+    MANUAL="manual.md"
+    SHOTS=("$ROOT"/docs/screenshot*.png)
+    ABOUT="A synthesizer that plays points in a PCA space learned from recorded notes."
+fi
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -60,7 +70,7 @@ fi
 cp -R "$WORK/vst3/$NAME.vst3" "$WORK/app/$NAME.app" "$WORK/zip/"
 cp "$ROOT/README.md" "$ROOT/LICENSE" "$ROOT/CHANGELOG.md" "$WORK/zip/"
 mkdir -p "$WORK/zip/Manual"
-cp "$ROOT/docs/manual.md" "$ROOT"/docs/screenshot*.png "$WORK/zip/Manual/"
+cp "$ROOT/docs/$MANUAL" "${SHOTS[@]}" "$WORK/zip/Manual/"
 ( cd "$WORK/zip" && ditto -c -k --sequesterRsrc . "$OUT/$STEM.zip" )
 
 # ---- installer ----------------------------------------------------------------------
@@ -95,15 +105,15 @@ pkgbuild --root "$WORK/app" --component-plist "$WORK/app.plist" --install-locati
 
 cp "$ROOT/LICENSE" "$WORK/resources/LICENSE.txt"
 cat > "$WORK/resources/welcome.txt" <<EOF2
-PCASynth $VERSION
+$NAME $VERSION
 
-A synthesizer that plays points in a PCA space learned from recorded notes.
+$ABOUT
 This installs the VST3 plug-in into /Library/Audio/Plug-Ins/VST3 and, if
 you choose it under Customize, the Standalone app into /Applications.
 In Live: Settings > Plug-Ins, then Rescan. It appears under CrumpLab.
-The manual (Manual/manual.md) is in the zip download, next to the installer.
+The manual (Manual/$MANUAL) is in the zip download, next to the installer.
 EOF2
-sed -e "s/@VERSION@/$VERSION/g" -e "s/@ID@/$ID/g" "$ROOT/scripts/distribution.xml" > "$WORK/distribution.xml"
+sed -e "s/@VERSION@/$VERSION/g" -e "s/@ID@/$ID/g" -e "s/@NAME@/$NAME/g" "$ROOT/scripts/distribution.xml" > "$WORK/distribution.xml"
 
 SIGN_ARGS=()
 if [[ -n "${MACOS_SIGN_INSTALLER:-}" ]]; then

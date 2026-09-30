@@ -2,6 +2,7 @@
 
 #include "pcs/Fft.h"
 #include "pcs/Synth.h"
+#include "pcs/WaveModel.h"
 
 #include <algorithm>
 #include <cmath>
@@ -130,7 +131,7 @@ double envelopeDistance (const HarmonicSound& reference, const HarmonicSound& ot
     return cells > 0 ? std::sqrt (sum / static_cast<double> (cells)) : 0.0;
 }
 
-AudioBuffer renderPoint (const Model& model, const std::vector<float>& z, double midiPitch, double sampleRate)
+AudioBuffer renderPoint (std::shared_ptr<const Space> space, const std::vector<float>& z, double midiPitch, double sampleRate)
 {
     Synth synth;
     synth.prepare (sampleRate);
@@ -148,7 +149,8 @@ AudioBuffer renderPoint (const Model& model, const std::vector<float>& z, double
     p.noiseDb = 0.0f;
     p.levelLock = 0.0f;
     synth.setParams (p);
-    synth.setModel (std::make_shared<const Model> (model));
+    const double seconds = space->durationSeconds();
+    synth.setModel (std::move (space));
 
     const int note = static_cast<int> (std::lround (midiPitch));
     MidiEvent events[2];
@@ -158,7 +160,7 @@ AudioBuffer renderPoint (const Model& model, const std::vector<float>& z, double
     events[1].note = note;
     events[1].value = 1.0f;
 
-    const auto total = static_cast<size_t> ((model.durationSeconds() + 0.05) * sampleRate);
+    const auto total = static_cast<size_t> ((seconds + 0.05) * sampleRate);
     std::vector<float> out (total);
     const int block = 256;
     for (size_t done = 0; done < total; done += block)
@@ -197,11 +199,11 @@ SoundInspection inspectSound (const Model& model, int index, const AudioBuffer& 
     }
 
     // The analysis on its own, and the sound's point in the model.
-    r.analysis = renderPoint (singleSoundModel (r.analysed, model.analysis), {}, r.pitch, sr);
+    r.analysis = renderPoint (std::make_shared<const Model> (singleSoundModel (r.analysed, model.analysis)), {}, r.pitch, sr);
     auto z = model.soundZ (index);
     if (options.components >= 0 && options.components < static_cast<int> (z.size()))
         z.resize (static_cast<size_t> (options.components));
-    r.model = renderPoint (model, z, r.pitch, sr);
+    r.model = renderPoint (std::make_shared<const Model> (model), z, r.pitch, sr);
 
     // Loudness-matched to the original, for listening side by side.
     const double target = rms (original);
@@ -232,6 +234,81 @@ SoundInspection inspectSound (const Model& model, int index, const AudioBuffer& 
     r.pitchCents = r.analysed.pitchCents;
     r.modelPitchCents = decoded.pitchCents;
     return r;
+}
+
+namespace {
+SoundInspection inspectWave (const std::shared_ptr<const WaveModel>& model, int index, const AudioBuffer& file, const InspectOptions& options)
+{
+    SoundInspection r;
+    r.waveform = true;
+    r.name = model->names[static_cast<size_t> (index)];
+    const auto sr = file.sampleRate;
+    // The sound as training prepared it (same pitch, onset, phase and gain).
+    const int shift = index < static_cast<int> (model->shifts.size()) ? model->shifts[static_cast<size_t> (index)] : 0;
+    const auto prepared = prepareWave (file, model->settings, model->refHz, {}, r.name, &shift);
+    r.pitch = 69.0 + 12.0 * std::log2 (prepared.f0 / 440.0);
+
+    const auto length = static_cast<size_t> ((model->durationSeconds() * (model->settings.alignPitch ? model->refHz / prepared.f0 : 1.0) + 0.05) * sr);
+    const auto mono = monoMix (file);
+    std::vector<float> original (length, 0.0f);
+    const auto start = static_cast<size_t> (std::lround (prepared.onsetSeconds * sr));
+    // Cut and faded where the space's version ends (at the sound's own pitch).
+    const double stretch = model->settings.alignPitch ? model->refHz / prepared.f0 : 1.0;
+    const auto playable = static_cast<size_t> (model->durationSeconds() * stretch * sr);
+    const auto fade = static_cast<size_t> (model->settings.fadeSeconds * stretch * sr);
+    for (size_t i = 0; i < playable && start + i < mono.size(); ++i)
+    {
+        const double g = i + fade > playable ? static_cast<double> (playable - i) / static_cast<double> (std::max<size_t> (1, fade)) : 1.0;
+        original[i] = static_cast<float> (mono[start + i] * g);
+    }
+
+    r.analysis = renderPoint (std::make_shared<const WaveModel> (singleWaveModel (prepared, *model)), {}, r.pitch, sr);
+    auto z = model->soundZ (index);
+    if (options.components >= 0 && options.components < static_cast<int> (z.size()))
+        z.resize (static_cast<size_t> (options.components));
+    r.model = renderPoint (model, z, r.pitch, sr);
+
+    const double target = rms (original);
+    for (auto* b : { &r.analysis, &r.model })
+    {
+        auto& x = b->channels[0];
+        x.resize (length, 0.0f);
+        const double level = rms (x);
+        if (level > 0.0 && target > 0.0)
+            for (auto& v : x)
+                v = static_cast<float> (v * target / level);
+    }
+    r.original = monoBuffer (std::move (original), sr);
+    r.specOriginal = spectrogram (r.original.channels[0], sr);
+    r.specAnalysis = spectrogram (r.analysis.channels[0], sr);
+    r.specModel = spectrogram (r.model.channels[0], sr);
+    r.analysisError = spectralDistance (r.specOriginal, r.specAnalysis);
+    r.analysisAttackError = spectralDistance (r.specOriginal, r.specAnalysis, 0.0, options.attackSeconds);
+    r.modelError = spectralDistance (r.specOriginal, r.specModel);
+    r.modelAttackError = spectralDistance (r.specOriginal, r.specModel, 0.0, options.attackSeconds);
+    r.pcaError = spectralDistance (r.specAnalysis, r.specModel);
+
+    const auto decoded = model->decode (z.data(), static_cast<int> (z.size()));
+    double e = 0.0, s = 0.0;
+    for (size_t i = 0; i < decoded.size() && i < prepared.samples.size(); ++i)
+    {
+        e += static_cast<double> (decoded[i] - prepared.samples[i]) * (decoded[i] - prepared.samples[i]);
+        s += static_cast<double> (prepared.samples[i]) * prepared.samples[i];
+    }
+    r.envelopeError = s > 0.0 ? std::max (-100.0, 10.0 * std::log10 (std::max (e, 1e-30) / s)) : 0.0;
+    return r;
+}
+} // namespace
+
+SoundInspection inspectSound (const std::shared_ptr<const Space>& space, int index, const AudioBuffer& file, const InspectOptions& options)
+{
+    if (space == nullptr || index < 0 || index >= space->numSounds())
+        throw std::runtime_error ("no such training sound");
+    if (auto w = std::dynamic_pointer_cast<const WaveModel> (space))
+        return inspectWave (w, index, file, options);
+    if (auto m = std::dynamic_pointer_cast<const Model> (space))
+        return inspectSound (*m, index, file, options);
+    throw std::runtime_error ("unknown kind of space");
 }
 
 } // namespace pcs

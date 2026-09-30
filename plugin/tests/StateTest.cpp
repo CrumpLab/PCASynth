@@ -2,7 +2,7 @@
 // sounds, and the state round trip with an embedded model.
 #include "../src/PluginEditor.h"
 #include "../src/PluginProcessor.h"
-#include "../src/Presets.h"
+#include "Presets.h"
 #include "TrainingSet.h"
 #include "pcs/Wav.h"
 
@@ -463,7 +463,7 @@ int main()
         ts.analysis.pitchTracking = pcs::PitchTracking::On;
         tr.setSettings (ts);
         juce::String err;
-        const auto tm = tr.trainNow (err);
+        const auto tm = std::dynamic_pointer_cast<const pcs::Model> (tr.trainNow (err));
         check (tm != nullptr && tm->numNoiseBands == 8 && ! tm->hasPartials && tm->representation == pcs::Representation::ShapeLoudness
                    && tm->pitchTracking,
                "training options shape the model (noise bands, partials, representation, pitch tracking)");
@@ -483,7 +483,7 @@ int main()
     // ---- Stage 8: presets, Level Lock ----
     {
         auto q = fresh();
-        const auto& presets = pcsplugin::factoryPresets();
+        const auto& presets = q->getFactoryPresets();
         check (presets.size() >= 16 && presets[0].name == "Init" && q->getNumPrograms() == 1,
                "factory presets exist (in the editor; the host sees one program)");
         check (std::abs (getParam (*q, "level_lock") - 1.0f) < 1e-6f, "Level Lock is on by default");
@@ -619,7 +619,7 @@ int main()
         rs.analysis.harmonics = 32;
         trainer.setSettings (rs);
         juce::String err;
-        const auto m = trainer.trainNow (err);
+        const auto m = std::dynamic_pointer_cast<const pcs::Model> (trainer.trainNow (err));
         check (m != nullptr && m->hasPitchCurve && m->fitByComponents.size() == static_cast<size_t> (m->numComponents() + 1),
                "a trained space has a pitch curve and a fit report");
         auto& inspector = r->getInspector();

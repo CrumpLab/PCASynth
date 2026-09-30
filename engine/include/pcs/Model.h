@@ -2,6 +2,7 @@
 
 #include "pcs/Harmonic.h"
 #include "pcs/Pca.h"
+#include "pcs/Space.h"
 
 #include <cmath>
 #include <cstdint>
@@ -10,7 +11,6 @@
 
 namespace pcs {
 
-constexpr int kMaxComponents = 64;
 constexpr int kMaxModelHarmonics = 128;
 
 // A trained PCA sound space: the mean sound plus principal components, and
@@ -26,9 +26,8 @@ constexpr int kMaxModelHarmonics = 128;
 //   pitch      numFrames                   (if hasPitchCurve) each frame's pitch, cents from f0 × pitchCurveWeight
 // With pitch tracking, a direction (pitchSlope, per semitone) is regressed out
 // before the PCA and added back for each note: timbre follows pitch.
-struct Model
+struct Model final : Space
 {
-    std::string title;              // shown in the plugin, e.g. the file name
     AnalysisSettings analysis;
     int numFrames = 0;
     int numHarmonics = 0;
@@ -42,10 +41,6 @@ struct Model
     double frameRate = 100.0;
     float floorDb = -80.0f;
     float noiseCeilingDb = 0.0f;    // decoded noise is clamped here: the loudest noise in training + 6 dB
-    std::vector<std::string> names; // training sounds
-    std::vector<double> f0s;
-    std::vector<double> gainsDb;
-    PcaResult pca;
 
     // Pitch tracking.
     bool pitchTracking = false;
@@ -60,27 +55,17 @@ struct Model
     int pitchCurveOffset() const noexcept { return partialOffset() + (hasPartials ? numHarmonics : 0); }
     int dims() const noexcept { return pitchCurveOffset() + (hasPitchCurve ? numFrames : 0); }
 
-    // How well the components reproduce the training sounds, from training:
-    // the RMS difference (dB) between each sound's harmonic envelopes and its
-    // reconstruction from all the components (fitErrorDb, per sound), and the
-    // mean over sounds with the first K components (fitByComponents[K], K =
-    // 0..numComponents). Empty for models trained before they existed.
-    std::vector<float> fitErrorDb, fitByComponents;
+    // The fit report (Space) measures the harmonic envelopes: the RMS
+    // difference (dB) between each sound's and its reconstruction.
+    const char* fitMeasure() const noexcept override { return "harmonic envelope error (dB)"; }
+    double durationSeconds() const noexcept override { return numFrames / frameRate; }
 
-    int numSounds() const noexcept { return static_cast<int> (names.size()); }
-    int numComponents() const noexcept { return pca.numComponents; }
-    double sd (int j) const { return std::sqrt (pca.variance[static_cast<size_t> (j)]); }
-    double varianceExplained (int j) const { return pca.variance[static_cast<size_t> (j)] / pca.totalVariance; }
-    double durationSeconds() const noexcept { return numFrames / frameRate; }
-    int soundIndex (const std::string& name) const; // -1 if absent
-    double soundPitch (int i) const { return 69.0 + 12.0 * std::log2 (f0s[static_cast<size_t> (i)] / 440.0); }
+
 
     // Semitones from pitchRef for a played note, as used by the pitch
     // direction: clamped to the training range ± an octave, times keytrack.
     float pitchDelta (double midiNote, float keytrack = 1.0f) const noexcept;
 
-    // Training sound i's coordinates (z units), numComponents() values.
-    std::vector<float> soundZ (int i) const;
     // z coordinates of any analysed sound (projection onto the components).
     std::vector<float> project (const HarmonicSound& sound) const;
 

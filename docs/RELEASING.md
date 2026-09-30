@@ -1,11 +1,12 @@
-# Releasing PCASynth
+# Releasing PCASynth and PCAWave
 
-Every push builds and tests PCASynth on Linux and macOS (see
-`.github/workflows/build.yml`). The macOS job produces two downloads (the
-`PCASynth-macOS` artifact):
-- `PCASynth-<version>-macOS.zip`: the VST3, the Standalone app, and the
+Every push builds and tests both plugins on Linux and macOS (see
+`.github/workflows/build.yml`). They share one version number. The macOS
+job produces two downloads per plugin (the `PCASynth-macOS` and
+`PCAWave-macOS` artifacts):
+- `<Plugin>-<version>-macOS.zip`: the VST3, the Standalone app, and the
   manual;
-- `PCASynth-<version>-macOS.pkg`: an installer for the VST3, plus the
+- `<Plugin>-<version>-macOS.pkg`: an installer for the VST3, plus the
   Standalone app if chosen.
 
 Without signing secrets, these builds are **ad-hoc signed**. They work, but
@@ -61,7 +62,8 @@ What the secrets turn on:
      reports this to hosts);
    - a `## [x.y.z] - date` section at the top of `CHANGELOG.md` (the release
      notes come from it);
-   - the version line at the top of `docs/manual.md`.
+   - the version lines at the top of `docs/manual.md` and
+     `docs/manual-pcawave.md`.
 3. Commit, then tag and push the tag:
 
    ```sh
@@ -70,7 +72,8 @@ What the secrets turn on:
    ```
 
 4. The workflow builds, tests, signs and notarizes. The `release` job then
-   creates a GitHub release named "PCASynth x.y.z" with the zip and the pkg,
+   creates a GitHub release named "PCASynth and PCAWave x.y.z" with both
+   plugins' zips and pkgs,
    using that version's changelog section as the notes. Versions 0.x are
    marked as pre-releases.
 
@@ -107,6 +110,8 @@ VST3 host):
       pressure and slide; notes do not leak into each other.
 - [ ] CPU in the DAW's meter is in line with `pcs-bench` (manual §13).
 - [ ] Offline bounce matches real-time playback.
+- [ ] PCAWave too: it scans next to PCASynth, trains on a folder of WAVs,
+      and a project with both plugins reopens with each one's space.
 
 ## Building a release locally
 
@@ -114,9 +119,10 @@ VST3 host):
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
 cmake --build build --parallel
 ctest --test-dir build
-MACOS_SIGN_APP="Developer ID Application: …" MACOS_SIGN_INSTALLER="Developer ID Installer: …" \
-APPLE_ID=… APPLE_TEAM_ID=… APPLE_APP_PASSWORD=… \
-  scripts/package_macos.sh build/plugin/PCASynth_artefacts/Release dist
+export MACOS_SIGN_APP="Developer ID Application: …" MACOS_SIGN_INSTALLER="Developer ID Installer: …"
+export APPLE_ID=… APPLE_TEAM_ID=… APPLE_APP_PASSWORD=…
+scripts/package_macos.sh build/plugin/PCASynth_artefacts/Release dist PCASynth
+scripts/package_macos.sh build/plugin-wave/PCAWave_artefacts/Release dist PCAWave
 ```
 
-Leave out the variables for an ad-hoc signed build.
+Leave out the exports for an ad-hoc signed build.

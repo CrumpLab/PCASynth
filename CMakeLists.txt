@@ -6,7 +6,7 @@ if(APPLE AND NOT CMAKE_OSX_ARCHITECTURES)
 endif()
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
 
-project(PCASynth VERSION 0.9.0 LANGUAGES C CXX)
+project(PCASynth VERSION 0.10.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -17,7 +17,8 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
-option(PCS_BUILD_PLUGIN "Build the JUCE plugin (fetches JUCE)" ON)
+option(PCS_BUILD_PLUGIN "Build the JUCE plugins (fetches JUCE)" ON)
+option(PCS_BUILD_WAVE "With PCS_BUILD_PLUGIN: also build PCAWave, the waveform plugin" ON)
 option(PCS_BUILD_TOOLS "Build the offline training, render and test-audio tools" ON)
 option(PCS_BUILD_TESTS "Build unit tests (fetches Catch2)" ON)
 
@@ -35,5 +36,9 @@ if(PCS_BUILD_TESTS)
 endif()
 
 if(PCS_BUILD_PLUGIN)
+    add_subdirectory(plugin-common)
     add_subdirectory(plugin)
+    if(PCS_BUILD_WAVE)
+        add_subdirectory(plugin-wave)
+    endif()
 endif()

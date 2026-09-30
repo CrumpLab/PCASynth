@@ -57,16 +57,21 @@ struct SoundInspection
     double analysisError = 0.0, analysisAttackError = 0.0; // original vs analysis: what the harmonic model loses
     double modelError = 0.0, modelAttackError = 0.0;       // original vs model: everything
     double pcaError = 0.0;                                 // analysis vs model: what the PCA loses
-    double envelopeError = 0.0;   // harmonic envelopes, analysis vs model (dB)
+    double envelopeError = 0.0;   // harmonic envelopes, analysis vs model (dB); waveform spaces: the
+                                  // model's residual, dB below the aligned sound
+    bool waveform = false;        // a waveform space: "analysis" is the aligned original the PCA saw
     std::vector<float> pitchCents, modelPitchCents; // pitch curves (cents from the fundamental; empty if not tracked)
 };
 
 // Inspects training sound `index` of `model`, given its audio file. Throws
 // std::runtime_error if the file cannot be analysed with the model's settings.
 SoundInspection inspectSound (const Model& model, int index, const AudioBuffer& file, const InspectOptions& options = {});
+// Either kind of space.
+SoundInspection inspectSound (const std::shared_ptr<const Space>& space, int index, const AudioBuffer& file,
+                              const InspectOptions& options = {});
 
-// Plays `model` at the point `z` (z units) once through its envelope, at
+// Plays `space` at the point `z` (z units) once through its envelope, at
 // `midiPitch` exactly, mono. Offline.
-AudioBuffer renderPoint (const Model& model, const std::vector<float>& z, double midiPitch, double sampleRate);
+AudioBuffer renderPoint (std::shared_ptr<const Space> space, const std::vector<float>& z, double midiPitch, double sampleRate);
 
 } // namespace pcs

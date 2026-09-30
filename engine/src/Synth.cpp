@@ -41,9 +41,38 @@ void Synth::prepare (double sampleRate)
     reset();
 }
 
-std::unique_ptr<Synth::ModelSlot> Synth::makeSlot (std::shared_ptr<const Model> model)
+std::unique_ptr<Synth::ModelSlot> Synth::makeSlot (std::shared_ptr<const Space> space)
 {
     auto slot = std::make_unique<ModelSlot>();
+    if (auto wave = std::dynamic_pointer_cast<const WaveModel> (space))
+    {
+        for (int i = 0; i < wave->numSounds(); ++i)
+        {
+            Point z {};
+            const auto zs = wave->soundZ (i);
+            std::copy (zs.begin(), zs.end(), z.begin());
+            slot->soundZ.push_back (z);
+        }
+        for (int j = 0; j < wave->numComponents(); ++j)
+            slot->relSd[static_cast<size_t> (j)] = static_cast<float> (wave->sd (j) / wave->sd (0));
+        slot->refLevelDb = wave->refLevelDb;
+        const int k = wave->numComponents();
+        slot->tableWidth = roundUpToLanes (k + 1);
+        const auto w = static_cast<size_t> (slot->tableWidth);
+        slot->table.assign (static_cast<size_t> (wave->numSamples) * w, 0.0f);
+        for (int i = 0; i < wave->numSamples; ++i)
+        {
+            float* row = slot->table.data() + static_cast<size_t> (i) * w;
+            row[0] = wave->pca.mean[static_cast<size_t> (i)];
+            for (int j = 0; j < k; ++j)
+                row[1 + j] = static_cast<float> (wave->pca.component (j)[i] * wave->sd (j));
+        }
+        slot->wave = std::move (wave);
+        return slot;
+    }
+    auto model = std::dynamic_pointer_cast<const Model> (space);
+    if (space != nullptr && model == nullptr)
+        throw std::invalid_argument ("unknown kind of space");
     if (model != nullptr && model->numHarmonics > kMaxHarmonics)
         throw std::invalid_argument ("model has more harmonics than the synth plays");
     if (model != nullptr)
@@ -77,7 +106,7 @@ std::unique_ptr<Synth::ModelSlot> Synth::makeSlot (std::shared_ptr<const Model> 
     return slot;
 }
 
-void Synth::setModel (std::shared_ptr<const Model> model)
+void Synth::setModel (std::shared_ptr<const Space> model)
 {
     auto slot = makeSlot (std::move (model));
     swapModel (slot);
@@ -242,9 +271,16 @@ void Synth::handle (const MidiEvent& e) noexcept
     }
 }
 
+double Synth::lastPosition() const noexcept
+{
+    if (const auto* w = waveModel())
+        return w->numSamples - 1;
+    return model() != nullptr ? model()->numFrames - 1 : 0;
+}
+
 void Synth::noteOn (int note, float velocity, int channel) noexcept
 {
-    if (model() == nullptr)
+    if (space() == nullptr)
         return;
     const int poly = std::clamp (params.polyphony, 1, kMaxVoices);
     Voice* v = nullptr;
@@ -323,7 +359,8 @@ void Synth::noteOn (int note, float velocity, int channel) noexcept
     const float sens = std::clamp (params.velocitySensitivity, 0.0f, 1.0f);
     v->gain = 1.0f - sens + sens * std::clamp (velocity, 0.0f, 1.0f) * std::clamp (velocity, 0.0f, 1.0f);
     v->dir = 1;
-    v->pos = params.mode == PlayMode::Scan ? params.scanPosition * (model()->numFrames - 1) : 0.0;
+    v->pos = params.mode == PlayMode::Scan ? params.scanPosition * lastPosition() : 0.0;
+    v->waveStarted = false;
     v->env = 0.0f;
     v->releaseSeconds = params.release;
     for (int h = 0; h < kMaxHarmonics; ++h)
@@ -430,17 +467,19 @@ void Synth::setNoiseFilters (Voice& v) noexcept
 
 float Synth::computeLevelGain (const Point& z, float pitchDelta) noexcept
 {
-    const auto& m = *current->model;
     const float lock = std::clamp (params.levelLock, 0.0f, 1.0f);
-    if (lock <= 0.0f || m.numSounds() == 0)
+    if (lock <= 0.0f || space() == nullptr || space()->numSounds() == 0)
         return 1.0f;
-    const float level = m.levelDb (z.data(), kMaxComponents, pitchDelta, scratchLevel.data(), scratchLevelN.data());
+    const float level = waveModel() != nullptr ? waveModel()->levelDb (z.data(), kMaxComponents)
+                                               : model()->levelDb (z.data(), kMaxComponents, pitchDelta, scratchLevel.data(), scratchLevelN.data());
     // Cut as much as needed; boost only a little (near-silent points stay quiet rather than turning into hiss).
     return dbToLin (lock * std::clamp (current->refLevelDb - level, -48.0f, 12.0f));
 }
 
 float Synth::pitchCurveAt (const Voice& v, double pos) const noexcept
 {
+    if (model() == nullptr)
+        return 0.0f;
     const auto& m = *current->model;
     if (! m.hasPitchCurve || params.pitchEnvelope == 0.0f)
         return 0.0f;
@@ -673,7 +712,7 @@ void Synth::modulate (int n) noexcept
 void Synth::render (float* out, int n) noexcept
 {
     std::fill (out, out + n, 0.0f);
-    if (model() == nullptr)
+    if (space() == nullptr)
         return;
 
     // Glide towards the target point.
@@ -706,7 +745,12 @@ void Synth::render (float* out, int n) noexcept
     std::fill (lanes.begin(), lanes.end(), 0.0f);
     for (auto& v : voices)
         if (v.active)
-            renderVoice (v, n);
+        {
+            if (waveModel() != nullptr)
+                renderWaveVoice (v, n);
+            else
+                renderVoice (v, n);
+        }
     for (int i = 0; i < n; ++i)
     {
         const float* l = lanes.data() + i * kLanes;
@@ -963,6 +1007,166 @@ void Synth::renderVoice (Voice& v, int n) noexcept
         }
     }
 
+    if (finished)
+        v.active = false;
+}
+
+// ---- waveform voices (WaveModel) ------------------------------------------------------
+
+void Synth::renderWaveVoice (Voice& v, int n) noexcept
+{
+    const auto& m = *current->wave;
+    const auto& table = current->table;
+    const int width = current->tableWidth;
+    const double last = m.numSamples - 1;
+    // Resampling: the model's sounds sit at m.refHz, so the note's pitch sets the speed.
+    const double step = v.freq / m.refHz * m.sampleRate / sr;
+
+    // The mixing weights at the end of this sub-block: the mean, then the point.
+    const auto& z = v.ownPoint ? v.point : heard;
+    alignas (32) std::array<float, kMaxComponents + kLanes> w1 {};
+    w1[0] = 1.0f;
+    for (int j = 0; j < std::min (m.numComponents(), kMaxComponents); ++j)
+        w1[static_cast<size_t> (1 + j)] = z[static_cast<size_t> (j)];
+    if (! v.waveStarted)
+        v.waveW = w1;
+    alignas (32) std::array<float, kMaxComponents + kLanes> dw {};
+    for (int k = 0; k < width; ++k)
+        dw[static_cast<size_t> (k)] = w1[static_cast<size_t> (k)] - v.waveW[static_cast<size_t> (k)];
+
+    // Level Lock, envelope and gain, ramped across the sub-block.
+    if (v.ownPoint && (v.levelTick++ % 16 == 0))
+        v.levelTarget = computeLevelGain (v.point, 0.0f);
+    v.levelGain = v.levelTick <= 1 ? v.levelTarget : v.levelGain + 0.1f * (v.levelTarget - v.levelGain);
+    if (v.releasing)
+        v.env *= std::exp (-kLn1000 * n / (std::max (0.001f, v.releaseSeconds) * static_cast<float> (sr)));
+    else
+        v.env = std::min (1.0f, v.env + n / (std::max (0.0005f, params.attack) * static_cast<float> (sr)));
+    const bool finished = v.releasing && v.env < 1e-4f;
+    const float level = finished ? 0.0f : dbToLin (params.gainDb) * v.gain * v.env * (v.ownPoint ? v.levelGain : sharedLevelGain);
+    const float levelStart = v.waveStarted ? v.waveLevel : 0.0f;
+
+    // The mix at integer sample i: the start weights' and the change's (a small cache: neighbours repeat).
+    struct Cached
+    {
+        long index = -1;
+        float base = 0.0f, change = 0.0f;
+    };
+    std::array<Cached, 8> cache {};
+    auto mixAt = [&] (long i) -> const Cached& {
+        i = std::clamp (i, 0L, static_cast<long> (last));
+        auto& c = cache[static_cast<size_t> (i & 7)];
+        if (c.index != i)
+        {
+            const float* row = table.data() + static_cast<size_t> (i) * static_cast<size_t> (width);
+            F8 a {}, d {};
+            for (int k = 0; k < width; k += kLanes)
+            {
+                const F8 t = load<F8> (row + k);
+                a += load<F8> (v.waveW.data() + k) * t;
+                d += load<F8> (dw.data() + k) * t;
+            }
+            float sa = 0.0f, sd = 0.0f;
+            for (int k = 0; k < kLanes; ++k)
+            {
+                sa += a[k];
+                sd += d[k];
+            }
+            c = { i, sa, sd };
+        }
+        return c;
+    };
+    // 4-point Hermite interpolation at position p, weights `g` of the way to the end ones.
+    auto read = [&] (double p, float g) {
+        const auto i = static_cast<long> (std::floor (p));
+        const auto f = static_cast<float> (p - static_cast<double> (i));
+        float y[4];
+        for (int k = 0; k < 4; ++k)
+        {
+            const auto& c = mixAt (i - 1 + k);
+            y[k] = c.base + g * c.change;
+        }
+        const float c1 = 0.5f * (y[2] - y[0]);
+        const float c2 = y[0] - 2.5f * y[1] + 2.0f * y[2] - 0.5f * y[3];
+        const float c3 = 0.5f * (y[3] - y[0]) + 1.5f * (y[1] - y[2]);
+        return ((c3 * f + c2) * f + c1) * f + y[1];
+    };
+
+    // Where the loop is (Loop, Ping-pong), or the grain held (Scan).
+    double loopA = std::clamp<double> (params.loopStart, 0.0, 1.0) * last;
+    double loopB = std::clamp<double> (params.loopEnd, 0.0, 1.0) * last;
+    if (loopB < loopA)
+        std::swap (loopA, loopB);
+    if (params.mode == PlayMode::Scan)
+    {
+        const double centre = std::clamp<double> (params.scanPosition, 0.0, 1.0) * last, half = 0.04 * m.sampleRate;
+        loopA = std::max (0.0, centre - half);
+        loopB = std::min (last, centre + half);
+    }
+    const double minLen = 0.02 * m.sampleRate;
+    if (loopB - loopA < minLen)
+    {
+        loopB = std::min (last, loopA + minLen);
+        loopA = std::max (0.0, loopB - minLen);
+    }
+    const double loopLen = loopB - loopA;
+    const double xf = std::min (loopLen * 0.5, 0.05 * m.sampleRate); // crossfade at the loop's end
+    const bool looping = params.mode == PlayMode::Loop || params.mode == PlayMode::Scan;
+
+    for (int i = 0; i < n; ++i)
+    {
+        const float g = static_cast<float> (i + 1) / static_cast<float> (n);
+        float x = 0.0f;
+        if (looping && v.pos > loopB - xf && v.pos < loopB)
+        {
+            // Crossfade into the loop's start before jumping there.
+            const auto t = static_cast<float> ((v.pos - (loopB - xf)) / xf);
+            x = (1.0f - t) * read (v.pos, g) + t * read (v.pos - loopLen, g);
+        }
+        else
+            x = read (v.pos, g);
+        lanes[static_cast<size_t> (i * kLanes)] += x * (levelStart + g * (level - levelStart));
+
+        switch (params.mode)
+        {
+            case PlayMode::OneShot:
+                v.pos += step;
+                if (v.pos >= last)
+                {
+                    v.pos = last;
+                    if (! v.releasing)
+                    {
+                        v.releasing = true;
+                        v.releaseSeconds = std::min (v.releaseSeconds, 0.02f);
+                    }
+                }
+                break;
+            case PlayMode::Loop:
+            case PlayMode::Scan:
+                v.pos += step;
+                if (v.pos >= loopB)
+                    v.pos = loopA + std::fmod (v.pos - loopA, loopLen);
+                if (params.mode == PlayMode::Scan && (v.pos < loopA - 1.0 || v.pos > loopB))
+                    v.pos = loopA; // the grain moved
+                break;
+            case PlayMode::PingPong:
+                v.pos += step * v.dir;
+                if (v.pos >= loopB)
+                {
+                    v.pos = loopB - std::min (loopLen, v.pos - loopB);
+                    v.dir = -1;
+                }
+                else if (v.dir < 0 && v.pos <= loopA)
+                {
+                    v.pos = loopA + std::min (loopLen, loopA - v.pos);
+                    v.dir = 1;
+                }
+                break;
+        }
+    }
+    v.waveW = w1;
+    v.waveLevel = level;
+    v.waveStarted = true;
     if (finished)
         v.active = false;
 }

@@ -7,7 +7,8 @@ space those sounds span, and you play any point in that space: the training
 sounds themselves, morphs between them, or places no instrument has been.
 
 > **Status:** All eight stages are built, plus Stage 9, fidelity and
-> inspection (version 0.9.0): the engine, the
+> inspection, and Stage 10, **PCAWave**, a second plugin that runs the PCA
+> on the waveforms themselves (version 0.10.0): the engine, the
 > offline tools, and a playable VST3 with its own UI. It trains new spaces
 > from your audio, moves through them (random walks, LFOs, expression),
 > takes MPE (aimed at the Osmose), and models noise, inharmonic partials and
@@ -141,11 +142,16 @@ PCASynth/
   engine/   plain C++20, no framework dependency
     Harmonic   analysis: WAV → harmonic envelopes (dB)
     Pca        Gram-matrix PCA + Jacobi eigen-solver
-    Model      training, projection, decoding, .pcsm file format
-    Synth      polyphonic additive voices, play modes, smoothing
-  tools/    pcs-testgen, pcs-train, pcs-render, pcs-examples
+    Space      what both kinds of model share; file loading by magic
+    Model      harmonic model: training, decoding, .pcsm file format
+    WaveModel  waveform model (PCAWave): alignment, mix weights, .pcsw
+    Synth      polyphonic voices (additive, or waveform), play modes
+    Inspect    spectrograms and scores against the training files
+  tools/    pcs-testgen, pcs-train, pcs-render, pcs-examples, pcs-inspect, pcs-bench
   tests/    Catch2 unit + regression tests
-  plugin/   JUCE wrapper: parameters, state, editor, built-in factory model
+  plugin-common/  JUCE: shared processor, editor, panels, training, presets
+  plugin/         PCASynth: envelope view, factory model, presets
+  plugin-wave/    PCAWave: waveform view, Mix tab, factory space, presets
 ```
 
 - **Engine separate from JUCE** (as in MinervaSpaceEcho): built, tested and
@@ -671,13 +677,73 @@ dB):
 5. Per-frame partial tuning (inharmonicity that changes over time), and
    stereo.
 
+### Stage 10: PCAWave — done, awaiting a listen on real samples
+
+Asked for after discussing PCA on raw waveforms (§1): as a *separate*
+plugin, built from the same tree, so the UI can suit a space with no
+harmonics. Decided: one tree, two plugins, sharing everything they can.
+
+**Why it can work despite §1.** The two problems in §1 are phase and
+crossfading. Alignment answers the first: every sound is resampled to one
+pitch and slid (±½ period) to line its cycles up with the mean of the
+sounds before it, so mixes add instead of comb-filtering. The second is the
+point of the plugin: a linear morph synth, where between two sounds you
+hear both, blended, and every training sound is exact.
+
+**Engine:**
+- `Space` base (names, pitches, PCA, fit report) shared by `Model` and
+  `WaveModel`; `loadSpace` dispatches on the file magic (`PCSM`/`PCSW`).
+- `WaveModel`: training (polyphase windowed-sinc resampling, onset trim,
+  phase alignment by cross-correlation, loudest-50 ms loudness, fade),
+  Gram PCA, fit report (residual in dB below each sound), mix weights
+  (v_i = Σ_j z_j sd_j s_ij / Σ_i s_ij², plus (1 − Σv)/N each; exact at every
+  point), and a quadratic form for the level over the first 0.5 s (Level
+  Lock without decoding).
+- `Synth` waveform voices: an interleaved table [mean, sd_j·c_j …] per
+  sample, padded to 8 lanes; each output sample is a SIMD dot product with
+  weights ramped across the block, at four neighbouring table samples,
+  then Hermite-interpolated. Loop (50 ms crossfade), Ping-pong, One-shot,
+  Scan (±40 ms grain).
+- Inspection: the aligned sound replaces the analysis.
+
+**Plugins:**
+- `plugin-common/`: `SpaceProcessor` (parameterised by kind: layout,
+  state magic, model extension, trainer) and `SpaceEditor` (a pluggable
+  point view and extra tabs). The panels were made kind-aware (training
+  rows, inspect labels, the fit chart's axis).
+- PCASynth: unchanged behaviour, checked by its tests, plugin checks and an
+  identical screenshot.
+- PCAWave: its own parameter layout (no Speed, Brightness, Harmonics,
+  Noise, Keytrack, Pitch Env), waveform view, Mix tab, factory space
+  (24 kHz, 2 s, 24 components, 4.8 MB, built at build time), 13 presets,
+  headless checks and snapshots. Each plugin refuses the other's spaces.
+- CI and packaging for both; one version number.
+
+**Measured on the 60 synthetic sounds:**
+- Aligned vs original: 0.59 dB (PCASynth's analysis: 1.39).
+- Residual below each sound: −12 dB with 16 components, −9 dB with 32,
+  exact with all 59. Waveforms of different instruments share little, so
+  the space needs nearly all its components.
+- 48 kHz, 3 s, 59 components: 35 MB, trains in 3.6 s. CPU: 16 notes 5.0 %,
+  32 MPE notes 6.75 % of a core.
+
+**Suggested next:**
+1. Listen on real samples, especially how well phase alignment holds for
+   sounds with vibrato or drifting pitch.
+2. Per-sound time alignment beyond the onset (e.g. matching attack
+   lengths), so mixes of fast and slow attacks don't double.
+3. Key zones: several common pitches, to keep formants in place across the
+   keyboard.
+4. Smaller spaces: store components at 16 bits.
+
 ## 6. Decisions
 
 | # | Question | Decision |
 |---|---|---|
-| 1 | Representation | **Harmonic model** (per-harmonic dB envelopes), not raw-waveform PCA |
+| 1 | Representation | **Harmonic model** (per-harmonic dB envelopes), not raw-waveform PCA (for PCASynth; see 7) |
 | 2 | Framework / formats | **JUCE + CMake**, **VST3 on macOS** (plus Standalone for testing) |
 | 3 | Structure | Follows MinervaSpaceEcho: framework-free engine, offline tools, Catch2, CI |
 | 4 | First training data | **Synthetic**, generated deterministically (real sample libraries are blocked from the dev container; your own WAVs work any time) |
 | 5 | Licence | **Open source, AGPLv3** (assumed, as for MinervaSpaceEcho) |
 | 6 | Expressive controller | **MPE, for the Expressive E Osmose** (Stage 6): per-note bend, pressure and slide as per-note moves through the space |
+| 7 | Waveform PCA | **A second plugin, PCAWave**, in the same tree (shared `plugin-common/`), rather than an option in PCASynth or a separate branch |

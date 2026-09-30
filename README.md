@@ -11,9 +11,16 @@ harmonic is, every 10 ms), and PCA runs on those. Notes are resynthesised by a
 bank of sine oscillators, so any pitch plays the learned timbre. See
 [`plan.md`](plan.md) for the concept, the design and the staged build plan.
 
+**PCAWave**, its sister plugin built from the same tree, runs the PCA on
+the **waveforms themselves**: a linear morph synthesizer in which every
+training sound plays back exactly as recorded and every other point is a
+mix of the training waveforms, lined up in pitch and phase so they blend.
+It has its own window (a waveform view and a **Mix** tab showing which mix
+you hear) and [its own manual](docs/manual-pcawave.md).
+
 By [Matthew Crump](https://crumplab.com), Brooklyn College of CUNY.
 
-**Status: version 0.9.0.** A playable VST3
+**Status: version 0.10.0.** A playable VST3
 (plus a Standalone app) with its own UI:
 - a map of the sound space, a four-corner morph pad, a live view of the
   sound;
@@ -34,8 +41,10 @@ It has not yet been played in a DAW or on an Osmose.
 
 ## Install (macOS)
 
-Download `PCASynth-macOS` from the latest successful
-[build](../../actions/workflows/build.yml) run (or a release). Then either:
+Download `PCASynth-macOS` (and/or `PCAWave-macOS`) from the latest
+successful [build](../../actions/workflows/build.yml) run (or a release).
+The two plugins install and run side by side; the steps below are the same
+for PCAWave with its name in place of PCASynth. Then either:
 
 - run the `.pkg`, which installs `PCASynth.vst3` into
   `/Library/Audio/Plug-Ins/VST3` (and, under Customize, the Standalone app
@@ -185,18 +194,31 @@ are cached). Your project remembers the file list and settings, and
 
 ![Training](docs/screenshot-train.png)
 
+PCAWave:
+
+![PCAWave](docs/pcawave.png)
+
 ## Build
 
 Requires CMake ≥ 3.22 and a C++20 compiler. Dependencies (JUCE,
 nlohmann/json, Catch2) are fetched by CMake. On Linux JUCE needs the ALSA,
 X11 and freetype development packages (see `.github/workflows/build.yml`).
-`-DPCS_BUILD_PLUGIN=OFF` builds only the engine and tools.
+`-DPCS_BUILD_PLUGIN=OFF` builds only the engine and tools;
+`-DPCS_BUILD_WAVE=OFF` leaves out PCAWave. Each plugin is its own target
+(`PCASynth_VST3`, `PCAWave_VST3`, and `_Standalone`), so either can be built
+alone:
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel
 ctest --test-dir build
+
+cmake --build build --target PCAWave_VST3   # just PCAWave
 ```
+
+Layout: `engine/` (both models and the synth, no JUCE), `plugin-common/`
+(the processor, editor and panels the plugins share), `plugin/` (PCASynth)
+and `plugin-wave/` (PCAWave), each with its factory space and presets.
 
 ## Tools
 
@@ -213,6 +235,9 @@ build/tools/pcs-render space.pcsm out.wav --z 2,-1,0.5 --length 4
 
 # Everything at once: training set, model, listening examples and a map
 scripts/render_examples.sh build renders
+
+# A waveform space for PCAWave (.pcsw); render, inspect and bench take either kind
+build/tools/pcs-train --waveform -o space.pcsw --rate 48000 --duration 3 training/
 
 # How faithfully a model reproduces its training files (scores; --out DIR writes A/B WAVs)
 build/tools/pcs-inspect space.pcsm training/

@@ -1,10 +1,4 @@
-FetchContent_Declare(JUCE
-    GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
-    GIT_TAG        8.0.15
-    GIT_SHALLOW    TRUE
-)
-FetchContent_MakeAvailable(JUCE)
-
+# PCASynth: the harmonic plugin. The shared code is in plugin-common.
 option(PCS_COPY_PLUGIN_AFTER_BUILD "Install the plugin into the user plug-in folders after building" OFF)
 
 juce_add_plugin(PCASynth
@@ -24,22 +18,12 @@ juce_add_plugin(PCASynth
 )
 
 target_sources(PCASynth PRIVATE
-    src/Controls.cpp
     src/EnvelopeView.cpp
-    src/InspectPanel.cpp
-    src/Inspector.cpp
-    src/MorphPad.cpp
-    src/ParamGrid.cpp
-    src/Params.cpp
-    src/PresetBar.cpp
-    src/Presets.cpp
+    src/HarmonicPresets.cpp
     src/PluginEditor.cpp
     src/PluginProcessor.cpp
-    src/SoundMap.cpp
-    src/Theme.cpp
-    src/TrainPanel.cpp
-    src/Trainer.cpp
 )
+pcs_configure_plugin(PCASynth)
 
 # The factory model: the synthetic training set, generated and trained at
 # build time by the offline tools, then compiled into the plugin.
@@ -57,13 +41,6 @@ add_custom_command(
 add_custom_target(PcsFactoryModelFile DEPENDS "${PCS_FACTORY_MODEL}")
 juce_add_binary_data(PcsFactoryModel HEADER_NAME FactoryModel.h NAMESPACE FactoryModel SOURCES "${PCS_FACTORY_MODEL}")
 add_dependencies(PcsFactoryModel PcsFactoryModelFile)
-
-target_compile_definitions(PCASynth PUBLIC
-    JUCE_WEB_BROWSER=0
-    JUCE_USE_CURL=0
-    JUCE_VST3_CAN_REPLACE_VST2=0
-    JUCE_DISPLAY_SPLASH_SCREEN=0
-)
 
 target_link_libraries(PCASynth
     PRIVATE

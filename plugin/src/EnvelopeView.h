@@ -1,19 +1,20 @@
 #pragma once
 
 #include "PluginProcessor.h"
+#include "SpaceEditor.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
 // The sound at the current point: harmonic levels (rows, harmonic 1 at the
 // bottom) over time (columns), as a heat map. Loop or scan markers and the
 // playheads of sounding voices are drawn on top.
-class EnvelopeView final : public juce::Component
+class EnvelopeView final : public SpaceView
 {
 public:
     explicit EnvelopeView (PCASynthProcessor& p);
 
-    void setModel (std::shared_ptr<const pcs::Model> model);
-    void refresh(); // rebuilds the heat map when the point changes; moves playheads
+    void setModel (std::shared_ptr<const pcs::Space> space) override;
+    void refresh() override; // rebuilds the heat map when the point changes; moves playheads
 
     void paint (juce::Graphics&) override;
 

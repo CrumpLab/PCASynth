@@ -1,5 +1,48 @@
 # Changelog
 
+## [0.10.0] - 2026-09-30
+
+### PCAWave: a second plugin, PCA on the waveforms
+- **New plugin, PCAWave** (VST3 and Standalone, built from the same tree
+  and installed alongside PCASynth). PCA runs directly on the training
+  waveforms, so it is a linear morph synthesizer: each training sound
+  plays back exactly, and every other point is a mix of the training
+  waveforms. [Manual](docs/manual-pcawave.md).
+- **Training** lines the sounds up so they mix cleanly: each is resampled
+  to a common pitch (Note, or the median with Auto), trimmed at its onset,
+  shifted by up to half a period to line its phase up with the others,
+  loudness-matched and cut to a common Duration. Options: Sample rate
+  (48/32/24 kHz), Align pitch, Align phase. Spaces are saved as `.pcsw`.
+- **Mix tab**: every training sound's weight at the point you hear (they
+  sum to 100 %; negative weights subtract a sound). Click a sound to go to
+  it.
+- **Waveform view**: the waveform at the point with loop or scan markers
+  and playheads, four cycles close up, and a spectrogram.
+- **Voices** play the waveform at each note's pitch, recomputing it from
+  the point sample by sample (SIMD). Loop crossfades 50 ms; Scan loops an
+  80 ms grain. Level Lock holds every mix at the training sounds'
+  loudness.
+- **Inspect** shows the aligned sound, the model, and the waveform
+  residual in dB against components.
+- Factory space: the 60 synthetic sounds at 24 kHz, 2 s, 24 components
+  (4.8 MB). 13 factory presets.
+- Measured on the 60 synthetic sounds: the aligned sounds score 0.59 dB
+  against the originals (PCASynth's analysis: 1.39 dB). The residual with
+  16 components is about −12 dB, with 32 about −9 dB; waveform spaces need
+  nearly all their components. CPU: 16 notes of a 59-component 48 kHz
+  space ≈ 5 % of a core.
+
+### Shared
+- The plugin code is split into `plugin-common/` (processor, editor,
+  panels, training, inspection, presets) and one small folder per plugin.
+  PCASynth's behaviour, parameters, presets and saved state are unchanged.
+- Engine: a common `Space` base for both kinds of model; files are
+  recognised by their contents, so `pcs-render`, `pcs-inspect` and
+  `pcs-bench` take either. `pcs-train --waveform --rate --no-align-pitch
+  --no-align-phase`.
+- Packaging and CI build, validate (pluginval, strictest level) and
+  package both plugins; releases carry both.
+
 ## [0.9.0] - 2026-09-30
 
 ### Fidelity and inspection

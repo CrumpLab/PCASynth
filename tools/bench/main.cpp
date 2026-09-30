@@ -2,6 +2,7 @@
 // Optionally writes each case's output, to check that an optimisation leaves
 // the sound unchanged.
 #include "pcs/Model.h"
+#include "pcs/Space.h"
 #include "pcs/Synth.h"
 #include "pcs/Wav.h"
 
@@ -22,7 +23,7 @@ struct Case
     std::function<void (pcs::SynthParams&)> setup;
 };
 
-double run (const std::shared_ptr<const pcs::Model>& model, const Case& c, double seconds, const std::string& outDir)
+double run (const std::shared_ptr<const pcs::Space>& model, const Case& c, double seconds, const std::string& outDir)
 {
     constexpr double sr = 48000.0;
     constexpr int block = 256;
@@ -82,7 +83,7 @@ int main (int argc, char** argv)
         std::fprintf (stderr, "usage: pcs-bench model.pcsm [seconds] [--out DIR]\n");
         return 2;
     }
-    const auto model = std::make_shared<const pcs::Model> (pcs::loadModel (argv[1]));
+    const std::shared_ptr<const pcs::Space> model = pcs::loadSpace (argv[1]);
     double seconds = 5.0;
     std::string outDir;
     for (int i = 2; i < argc; ++i)
@@ -112,8 +113,11 @@ int main (int argc, char** argv)
               p.mod.voiceSpread = 0.5f;
           } },
     };
-    std::printf ("model: %s, %d harmonics, %d noise bands, %d components\n", model->title.c_str(), model->numHarmonics,
-                 model->numNoiseBands, model->numComponents());
+    if (const auto* h = dynamic_cast<const pcs::Model*> (model.get()))
+        std::printf ("model: %s, %d harmonics, %d noise bands, %d components\n", h->title.c_str(), h->numHarmonics,
+                     h->numNoiseBands, h->numComponents());
+    else
+        std::printf ("waveform space: %s, %d components\n", model->title.c_str(), model->numComponents());
     std::printf ("%-22s %8s\n", "case", "% core");
     for (const auto& c : cases)
         std::printf ("%-22s %8.2f\n", c.name, run (model, c, seconds, outDir));

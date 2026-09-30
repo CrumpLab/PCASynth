@@ -194,12 +194,6 @@ void fitReport (Model& m, const std::vector<std::vector<float>>& rows)
 }
 } // namespace
 
-int Model::soundIndex (const std::string& name) const
-{
-    const auto it = std::find (names.begin(), names.end(), name);
-    return it == names.end() ? -1 : static_cast<int> (it - names.begin());
-}
-
 float Model::pitchDelta (double midiNote, float keytrack) const noexcept
 {
     if (! pitchTracking)
@@ -250,14 +244,6 @@ std::vector<float> Model::encode (const HarmonicSound& s) const
             v[static_cast<size_t> (pitchCurveOffset() + t)] =
                 (t < static_cast<int> (s.pitchCents.size()) ? s.pitchCents[static_cast<size_t> (t)] : 0.0f) * pitchCurveWeight;
     return v;
-}
-
-std::vector<float> Model::soundZ (int i) const
-{
-    std::vector<float> z (static_cast<size_t> (numComponents()));
-    for (int j = 0; j < numComponents(); ++j)
-        z[static_cast<size_t> (j)] = static_cast<float> (pca.score (i, j) / sd (j));
-    return z;
 }
 
 std::vector<float> Model::project (const HarmonicSound& sound) const

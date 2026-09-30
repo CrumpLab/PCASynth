@@ -4,8 +4,9 @@
 
 EnvelopeView::EnvelopeView (PCASynthProcessor& p) : processor (p) {}
 
-void EnvelopeView::setModel (std::shared_ptr<const pcs::Model> m)
+void EnvelopeView::setModel (std::shared_ptr<const pcs::Space> space)
 {
+    auto m = std::dynamic_pointer_cast<const pcs::Model> (space);
     model = std::move (m);
     dirty = true;
     refresh();

@@ -8,7 +8,7 @@
 
 namespace pcs::tools {
 
-AudioBuffer renderNotes (std::shared_ptr<const Model> model, const SynthParams& params, const std::vector<Note>& notes,
+AudioBuffer renderNotes (std::shared_ptr<const Space> model, const SynthParams& params, const std::vector<Note>& notes,
                          double seconds, double sampleRate, const Automation& automation)
 {
     Synth synth;

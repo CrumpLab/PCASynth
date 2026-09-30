@@ -25,7 +25,7 @@ struct Note
 using Automation = std::function<void (double time, SynthParams& params)>;
 
 // Renders `notes` through a Synth, offline, mono.
-AudioBuffer renderNotes (std::shared_ptr<const Model> model, const SynthParams& params, const std::vector<Note>& notes,
+AudioBuffer renderNotes (std::shared_ptr<const Space> model, const SynthParams& params, const std::vector<Note>& notes,
                          double seconds, double sampleRate = 48000.0, const Automation& automation = {});
 
 // Plays an analysed envelope back directly (no PCA): the harmonic model's own
