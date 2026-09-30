@@ -2,6 +2,8 @@
 // playheads show.
 //   pcs-ui-snapshot out.png [width height] [training sound to jump to] [morph u v]
 //   pcs-ui-snapshot out.png width height train   (the Train panel after training on generated notes)
+//   pcs-ui-snapshot out.png width height walk    (a neighbour tour under a chord, Random Walk tab)
+//   pcs-ui-snapshot out.png width height mod     (LFOs & Expression tab)
 #include "../src/PluginEditor.h"
 #include "../src/PluginProcessor.h"
 #include "TrainingSet.h"
@@ -68,15 +70,44 @@ int main (int argc, char** argv)
     else if (argc > 4)
         processor.jumpToSound (processor.getModel()->soundIndex (argv[4]));
 
-    // Play a chord for a second.
+    const juce::String mode = argc > 4 ? juce::String (argv[4]) : juce::String();
+    auto set = [&processor] (const juce::String& id, float v) {
+        auto* param = processor.getParameters().getParameter (id);
+        param->setValueNotifyingHost (param->convertTo0to1 (v));
+    };
+    if (mode == "walk")
+    {
+        processor.jumpToSound (processor.getModel()->soundIndex ("reed_1"));
+        set ("walk_on", 1.0f);
+        set ("walk_mode", 3.0f); // neighbour tour
+        set ("walk_rate", 1.2f);
+        set ("walk_amount", 1.0f);
+        set ("walk_per_voice", 0.3f);
+        ed->selectTab (1);
+    }
+    else if (mode == "mod")
+    {
+        set ("lfo1_on", 1.0f);
+        set ("lfo2_on", 1.0f);
+        set ("lfo2_shape", 5.0f);
+        set ("vel_dest", 3.0f);
+        processor.setDirectionSound ("vowel_1");
+        ed->refreshModel();
+        ed->selectTab (2);
+    }
+
+    // Play a chord (for three seconds with a walk, so it leaves a trail).
     juce::AudioBuffer<float> block (2, 512);
     juce::MidiBuffer midi;
     for (int n : { 48, 55, 64 })
         midi.addEvent (juce::MidiMessage::noteOn (1, n, 0.8f), 0);
-    for (int i = 0; i < 90; ++i)
+    const int blocks = mode == "walk" ? 280 : 90;
+    for (int i = 0; i < blocks; ++i)
     {
         processor.processBlock (block, midi);
         midi.clear();
+        if (i % 5 == 0)
+            ed->refresh();
     }
     ed->refresh();
     ed->resized();

@@ -14,12 +14,15 @@ void EnvelopeView::setModel (std::shared_ptr<const pcs::Model> m)
 void EnvelopeView::refresh()
 {
     auto& params = processor.getParameters();
-    // The point as the synth hears it: exaggerated, truncated to Components Used.
+    // The point as the synth hears it: exaggerated, truncated to Components
+    // Used, plus any modulation (walk, LFOs, ...) while audio runs.
     auto z = processor.getPoint();
     const float ex = params.getRawParameterValue (pcsplugin::id::exaggerate)->load();
     const int used = juce::roundToInt (params.getRawParameterValue (pcsplugin::id::components)->load());
     for (int j = 0; j < pcs::kMaxComponents; ++j)
         z[static_cast<size_t> (j)] = j < used ? z[static_cast<size_t> (j)] * ex : 0.0f;
+    if (processor.isAudioRunning())
+        z = processor.getHeardPoint();
     if (dirty || z != shown)
     {
         shown = z;

@@ -11,6 +11,7 @@ add_library(pcs_engine STATIC
     src/Fft.cpp
     src/Harmonic.cpp
     src/Model.cpp
+    src/Modulation.cpp
     src/Pca.cpp
     src/Synth.cpp
     src/Wav.cpp

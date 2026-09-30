@@ -8,6 +8,7 @@ FetchContent_MakeAvailable(Catch2)
 add_executable(pcs_tests
     HarmonicTests.cpp
     ModelTests.cpp
+    ModulationTests.cpp
     PcaTests.cpp
     SynthTests.cpp
     TrainingSetTests.cpp

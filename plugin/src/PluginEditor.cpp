@@ -6,7 +6,7 @@ constexpr int kDefaultWidth = 1180, kDefaultHeight = 840;
 } // namespace
 
 PCASynthEditor::PCASynthEditor (PCASynthProcessor& p)
-    : AudioProcessorEditor (p), processor (p), soundMap (p), morphPad (p), envelope (p), strip (p), controls (p), trainPanel (p)
+    : AudioProcessorEditor (p), processor (p), soundMap (p), morphPad (p), envelope (p), strip (p), controls (p), trainPanel (p), walkPanel (p), modPanel (p)
 {
     setLookAndFeel (&lookAndFeel);
     title.setText ("PCASynth", juce::dontSendNotification);
@@ -20,6 +20,18 @@ PCASynthEditor::PCASynthEditor (PCASynthProcessor& p)
                                                             &envelope, &strip, &controls, &trainToggle, &saveButton })
         addAndMakeVisible (c);
     addChildComponent (trainPanel);
+    addChildComponent (walkPanel);
+    addChildComponent (modPanel);
+    for (size_t i = 0; i < tabs.size(); ++i)
+    {
+        auto& t = tabs[i];
+        t.setRadioGroupId (1001);
+        t.setClickingTogglesState (true);
+        t.setColour (juce::TextButton::buttonOnColourId, theme::accent.withAlpha (0.6f));
+        t.onClick = [this, i] { showTab (static_cast<int> (i)); };
+        addAndMakeVisible (t);
+    }
+    showTab (static_cast<int> (processor.getUiValue ("tab", 0)));
     trainPanel.onClose = [this] { showTraining (false); };
     trainToggle.setClickingTogglesState (true);
     trainToggle.setTooltip ("Build a new space from your own audio files");
@@ -70,6 +82,7 @@ void PCASynthEditor::refreshModel()
     morphPad.setModel (m);
     envelope.setModel (m);
     strip.setModel (m);
+    modPanel.setModel (m);
     if (m == nullptr)
     {
         modelInfo.setText ("No model", juce::dontSendNotification);
@@ -86,6 +99,16 @@ void PCASynthEditor::refreshModel()
                            + juce::String (m->durationSeconds(), 1) + " s  |  PC1-16 explain "
                            + juce::String (juce::roundToInt (100.0 * explained)) + " % of the variance",
                        juce::dontSendNotification);
+}
+
+void PCASynthEditor::showTab (int index)
+{
+    index = juce::jlimit (0, static_cast<int> (tabs.size()) - 1, index);
+    tabs[static_cast<size_t> (index)].setToggleState (true, juce::dontSendNotification);
+    strip.setVisible (index == 0);
+    walkPanel.setVisible (index == 1);
+    modPanel.setVisible (index == 2);
+    processor.setUiValue ("tab", index);
 }
 
 void PCASynthEditor::showTraining (bool show)
@@ -121,6 +144,8 @@ void PCASynthEditor::chooseSaveFile()
 void PCASynthEditor::refresh()
 {
     trainPanel.refresh();
+    walkPanel.refresh();
+    modPanel.refresh();
     soundMap.refresh();
     envelope.refresh();
     strip.refresh();
@@ -261,7 +286,13 @@ void PCASynthEditor::resized()
     r.removeFromTop (gap);
     auto controlsArea = r.removeFromBottom (juce::roundToInt (132 * scale));
     r.removeFromBottom (gap);
+    auto tabRow = r.removeFromTop (26);
+    for (auto& t : tabs)
+        t.setBounds (tabRow.removeFromLeft (150).reduced (2, 0));
+    r.removeFromTop (4);
     strip.setBounds (r);
+    walkPanel.setBounds (r);
+    modPanel.setBounds (r);
     controls.setBounds (controlsArea);
 
     trainPanel.setBounds (top);

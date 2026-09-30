@@ -48,6 +48,7 @@ void SoundMap::setModel (std::shared_ptr<const pcs::Model> m)
 
 void SoundMap::axesChanged()
 {
+    trail.clear();
     ax = juce::jmax (0, xAxis.getSelectedId() - 1);
     ay = juce::jmax (0, yAxis.getSelectedId() - 1);
     processor.setUiValue (kMapX, ax);
@@ -62,12 +63,48 @@ void SoundMap::axesChanged()
 
 void SoundMap::refresh()
 {
+    bool dirty = false;
     const auto p = processor.getPoint();
     if (p != point)
     {
         point = p;
-        repaint();
+        dirty = true;
     }
+
+    // The heard point differs from home when something modulates it.
+    const bool running = processor.isAudioRunning();
+    const auto h = running ? processor.getHeardPoint() : point;
+    auto& params = processor.getParameters();
+    const float ex = params.getRawParameterValue (pcsplugin::id::exaggerate)->load();
+    float diff = 0.0f;
+    for (size_t j = 0; j < h.size(); ++j)
+        diff = std::max (diff, std::abs (h[j] - point[j] * ex));
+    const bool show = running && diff > 1e-3f;
+    if (show || showHeard)
+    {
+        heard = h;
+        trail.push_back ({ h[static_cast<size_t> (ax)], h[static_cast<size_t> (ay)] });
+        if (trail.size() > 80) // 4 s at 20 Hz
+            trail.erase (trail.begin());
+        dirty = true;
+    }
+    if (! show)
+        trail.clear();
+    showHeard = show;
+
+    PCASynthProcessor::Point pts[PCASynthProcessor::kMaxShownVoices];
+    const int n = running ? processor.getVoicePoints (pts, PCASynthProcessor::kMaxShownVoices) : 0;
+    std::vector<juce::Point<float>> v;
+    for (int i = 0; i < n; ++i)
+        if (pts[i] != h)
+            v.push_back ({ pts[i][static_cast<size_t> (ax)], pts[i][static_cast<size_t> (ay)] });
+    if (v != voices)
+    {
+        voices = std::move (v);
+        dirty = true;
+    }
+    if (dirty)
+        repaint();
 }
 
 juce::Rectangle<float> SoundMap::plotArea() const
@@ -172,6 +209,27 @@ void SoundMap::paint (juce::Graphics& g)
     g.setColour (theme::cursor);
     g.drawEllipse (c.x - 7.0f, c.y - 7.0f, 14.0f, 14.0f, 2.0f);
     g.fillEllipse (c.x - 2.5f, c.y - 2.5f, 5.0f, 5.0f);
+
+    // The modulated point: a fading trail, each voice's own point, and where it is now.
+    if (showHeard)
+    {
+        auto clampPt = [this] (juce::Point<float> z) { return toScreen (juce::jlimit (-range, range, z.x), juce::jlimit (-range, range, z.y)); };
+        for (size_t i = 1; i < trail.size(); ++i)
+        {
+            const float age = static_cast<float> (i) / static_cast<float> (trail.size());
+            g.setColour (theme::cursor.withAlpha (0.1f + 0.6f * age));
+            g.drawLine ({ clampPt (trail[i - 1]), clampPt (trail[i]) }, 1.5f);
+        }
+        const auto hp = clampPt ({ heard[static_cast<size_t> (ax)], heard[static_cast<size_t> (ay)] });
+        g.setColour (theme::cursor);
+        g.fillEllipse (hp.x - 5.0f, hp.y - 5.0f, 10.0f, 10.0f);
+    }
+    for (const auto& v : voices)
+    {
+        const auto vp = toScreen (juce::jlimit (-range, range, v.x), juce::jlimit (-range, range, v.y));
+        g.setColour (theme::cursor.withAlpha (0.9f));
+        g.drawEllipse (vp.x - 3.5f, vp.y - 3.5f, 7.0f, 7.0f, 1.5f);
+    }
 
     // Hover label, drawn last so it sits above everything.
     if (hover >= 0)

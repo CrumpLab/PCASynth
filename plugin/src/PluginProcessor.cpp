@@ -83,6 +83,7 @@ void PCASynthProcessor::setModel (std::shared_ptr<const pcs::Model> m, bool isFa
         model = std::move (m);
         factory = isFactory;
     }
+    resolveDirection();
     sendChangeMessage();
 }
 
@@ -186,6 +187,56 @@ void PCASynthProcessor::resetToMean()
     endPointGesture();
 }
 
+pcs::SynthParams PCASynthProcessor::currentSynthParams() const
+{
+    auto p = reader.read (getDetail());
+    p.mod.hasDirection = hasDirection.load();
+    for (size_t j = 0; j < p.mod.direction.size(); ++j)
+        p.mod.direction[j] = direction[j].load (std::memory_order_relaxed);
+    p.bpm = bpm.load();
+    return p;
+}
+
+void PCASynthProcessor::setDirectionSound (const juce::String& name)
+{
+    setUiValue ("directionSound", name);
+    resolveDirection();
+}
+
+juce::String PCASynthProcessor::getDirectionSound() const { return getUiValue ("directionSound", "").toString(); }
+
+void PCASynthProcessor::resolveDirection()
+{
+    const auto m = getModel();
+    const int index = m != nullptr ? m->soundIndex (getDirectionSound().toStdString()) : -1;
+    if (index < 0)
+    {
+        hasDirection = false;
+        return;
+    }
+    const auto z = m->soundZ (index);
+    for (size_t j = 0; j < direction.size(); ++j)
+        direction[j].store (j < z.size() ? z[j] : 0.0f, std::memory_order_relaxed);
+    hasDirection = true;
+}
+
+PCASynthProcessor::Point PCASynthProcessor::getHeardPoint() const noexcept
+{
+    Point p {};
+    for (size_t j = 0; j < p.size(); ++j)
+        p[j] = heardPoint[j].load (std::memory_order_relaxed);
+    return p;
+}
+
+int PCASynthProcessor::getVoicePoints (Point* points, int max) const noexcept
+{
+    const int n = std::min (max, numVoicePoints.load());
+    for (int i = 0; i < n; ++i)
+        for (size_t j = 0; j < points[i].size(); ++j)
+            points[i][j] = voicePoint[static_cast<size_t> (i)][j].load (std::memory_order_relaxed);
+    return n;
+}
+
 int PCASynthProcessor::getVoicePositions (float* positions, int max) const noexcept
 {
     const int n = std::min (max, numVoicePos.load());
@@ -277,8 +328,14 @@ void PCASynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
 {
     juce::ScopedNoDenormals noDenormals;
 
+    // Host tempo for synced walks and LFOs.
+    if (auto* ph = getPlayHead())
+        if (const auto pos = ph->getPosition())
+            if (const auto b = pos->getBpm())
+                bpm.store (*b);
+
     // Parameters first, so a model swap (which resets voices) starts from them.
-    synth.setParams (reader.read (getDetail()));
+    synth.setParams (currentSynthParams());
 
     // A new model, once the previous old one has been collected.
     if (retired.load() == nullptr)
@@ -307,6 +364,12 @@ void PCASynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
             e = { e.offset, pcs::MidiEvent::Type::PitchBend, 0, (m.getPitchWheelValue() - 8192) / 8192.0f };
         else if (m.isSustainPedalOn() || m.isSustainPedalOff())
             e = { e.offset, pcs::MidiEvent::Type::Sustain, 0, m.isSustainPedalOn() ? 1.0f : 0.0f };
+        else if (m.isControllerOfType (1))
+            e = { e.offset, pcs::MidiEvent::Type::ModWheel, 0, m.getControllerValue() / 127.0f };
+        else if (m.isChannelPressure())
+            e = { e.offset, pcs::MidiEvent::Type::Pressure, 0, m.getChannelPressureValue() / 127.0f };
+        else if (m.isAftertouch())
+            e = { e.offset, pcs::MidiEvent::Type::Pressure, 0, m.getAfterTouchValue() / 127.0f };
         else if (m.isAllNotesOff() || m.isAllSoundOff())
             e = { e.offset, pcs::MidiEvent::Type::AllNotesOff, 0, 0.0f };
         else
@@ -322,6 +385,18 @@ void PCASynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
     for (int i = 0; i < n; ++i)
         voicePos[static_cast<size_t> (i)].store (positions[i], std::memory_order_relaxed);
     numVoicePos.store (n, std::memory_order_relaxed);
+
+    const auto& hp = synth.heardPoint();
+    for (size_t j = 0; j < hp.size(); ++j)
+        heardPoint[j].store (hp[j], std::memory_order_relaxed);
+    pcs::Point pts[kMaxShownVoices];
+    const int nv = synth.voicePoints (pts, kMaxShownVoices);
+    for (int i = 0; i < nv; ++i)
+        for (size_t j = 0; j < pts[i].size(); ++j)
+            voicePoint[static_cast<size_t> (i)][j].store (pts[i][j], std::memory_order_relaxed);
+    numVoicePoints.store (nv, std::memory_order_relaxed);
+    lastBlockMs.store (juce::Time::getMillisecondCounter(), std::memory_order_relaxed);
+    hasProcessed.store (true, std::memory_order_relaxed);
 }
 
 juce::AudioProcessorEditor* PCASynthProcessor::createEditor() { return new PCASynthEditor (*this); }
@@ -382,6 +457,7 @@ void PCASynthProcessor::setStateInformation (const void* data, int sizeInBytes)
             tree.removeChild (training, nullptr);
         }
         parameters.replaceState (tree);
+        resolveDirection();
         sendChangeMessage(); // the editor re-reads its settings (map axes, morph corners)
     }
 

@@ -27,6 +27,7 @@ target_sources(PCASynth PRIVATE
     src/Controls.cpp
     src/EnvelopeView.cpp
     src/MorphPad.cpp
+    src/ParamGrid.cpp
     src/Params.cpp
     src/PluginEditor.cpp
     src/PluginProcessor.cpp

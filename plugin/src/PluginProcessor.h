@@ -89,7 +89,22 @@ public:
     // The render behind exportWav: one note held until `seconds` minus the release (stereo, 48 kHz).
     static pcs::AudioBuffer renderNote (std::shared_ptr<const pcs::Model> model, const pcs::SynthParams& params, int note,
                                         double seconds);
-    pcs::SynthParams currentSynthParams() const { return reader.read (getDetail()); }
+    pcs::SynthParams currentSynthParams() const; // parameters + detail + direction sound + tempo
+
+    // Stage 5: the "direction" sound for Toward Sound destinations (LFOs,
+    // expression, macro), by name; empty for none. Saved with the state.
+    void setDirectionSound (const juce::String& name);
+    juce::String getDirectionSound() const;
+
+    // The point actually heard (home plus walk, LFOs, wheel, pressure, macro)
+    // and each sounding voice's own point, as of the last audio block.
+    Point getHeardPoint() const noexcept;
+    int getVoicePoints (Point* points, int max) const noexcept;
+    bool isAudioRunning() const noexcept
+    {
+        return hasProcessed.load() && juce::Time::getMillisecondCounter() - lastBlockMs.load() < 300;
+    }
+    static constexpr int kMaxShownVoices = 16;
 
     // Editor settings saved with the state (map axes, morph corners, ...).
     juce::var getUiValue (const juce::Identifier& key, const juce::var& fallback) const;
@@ -123,6 +138,14 @@ private:
     std::atomic<int> activeVoices { 0 }, lastNote { 60 };
     std::array<std::atomic<float>, pcs::Synth::kMaxVoices> voicePos {};
     std::atomic<int> numVoicePos { 0 };
+    std::array<std::atomic<float>, pcs::kMaxComponents> heardPoint {}, direction {};
+    std::array<std::array<std::atomic<float>, pcs::kMaxComponents>, kMaxShownVoices> voicePoint {};
+    std::atomic<int> numVoicePoints { 0 };
+    std::atomic<bool> hasDirection { false };
+    std::atomic<double> bpm { 120.0 };
+    std::atomic<juce::uint32> lastBlockMs { 0 };
+    std::atomic<bool> hasProcessed { false };
+    void resolveDirection();
     std::shared_ptr<std::atomic<bool>> alive = std::make_shared<std::atomic<bool>> (true);
 
     // Last: destroyed first, so its thread stops before anything it calls back into.

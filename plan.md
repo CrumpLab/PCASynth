@@ -6,8 +6,9 @@ of WAVs of different instruments all playing the same note. It learns the
 space those sounds span, and you play any point in that space: the training
 sounds themselves, morphs between them, or places no instrument has been.
 
-> **Status:** Stages 1–4 are built: the engine, the offline tools, and a
-> playable VST3 with its own UI that trains new spaces from your audio. Decisions are recorded in §6. Licence: open source (AGPLv3, following JUCE's open-source
+> **Status:** Stages 1–5 are built: the engine, the offline tools, and a
+> playable VST3 with its own UI, which trains new spaces from your audio
+> and moves through them (random walks, LFOs, expression). Decisions are recorded in §6. Licence: open source (AGPLv3, following JUCE's open-source
 > licence).
 
 ---
@@ -252,7 +253,7 @@ Each stage ends with something to **hear**.
   - Export renders a stereo note.
   - pluginval still passes at strictness 10.
 
-### Stage 4: Training inside the plugin — done, awaiting a play in a DAW
+### Stage 4: Training inside the plugin — done
 - **Train…** opens a panel in place of the map, morph pad and envelope view.
 - **Adding sounds:**
   - Add Files…, Add Folder… (searched recursively), or drop audio files or
@@ -292,11 +293,73 @@ Each stage ends with something to **hear**.
   - The training list, settings and model survive a state round trip.
   - The background thread finishes.
 
-### Stage 5: Movement and expression
-- Modulation of the point: LFOs and a random walk per component, velocity →
-  component, mod wheel / aftertouch → a chosen direction.
-- Per-voice offsets (each note of a chord at a slightly different point).
-- Macro directions: "the line from A to B" as a single knob.
+### Stage 5: Movement and expression — done, awaiting a play in a DAW
+All modulation runs in the engine (`Modulation.h`), so offline renders use it
+too. It is added after the point's smoothing:
+- the **heard point** = home (the sliders) + shared walk + LFOs + mod wheel
+  + aftertouch + macro;
+- each voice may add its own walk, velocity and spread on top of that.
+
+**Random walk** (the Random Walk tab):
+
+| Option | What it does |
+|---|---|
+| Mode: **Drift** | Brownian motion (Ornstein–Uhlenbeck). With Tether 100 % its spread is Amount (SD); lower tethers wander further, bounded at ±4 SD |
+| Mode: **Jumps** | A new random point (normal, SD = Amount) every step; **Glide** 0 = hard jumps … 100 % = continuous gliding |
+| Mode: **Tour** | Travels from training sound to training sound in random order (Amount 1 = arrive exactly; 0.5 = halfway from home) |
+| Mode: **Neighbour Tour** | Each step goes to one of the three most similar sounds (no immediate backtracking), so it drifts through families |
+| Rate / **Sync** + Step | Steps per second, or tempo-synced (1/16 note to 16 bars, host tempo) |
+| Components, **Focus** | Drift and Jumps move PC1..PCn. Focus: Equal (every component by Amount) or Main (in proportion to its variance) |
+| **Per Voice** | 0 = one shared walk; 100 % = every note wanders on its own (its walk starts at home) |
+| **Seed**, **Restart** | Same seed = same path. Restart: a note after silence restarts the walk, so each phrase repeats it |
+| **Freeze** | Holds the walk where it is |
+
+Switching the walk off glides home (100 ms); changing the mode or seed
+restarts it.
+
+**LFOs & Expression** tab:
+- **Two LFOs:**
+  - Shapes: sine, triangle, saw, square, sample & hold, smooth random.
+  - Rate in Hz, or synced to the tempo.
+  - Depth ±4 SD.
+  - Target: PC1–PC16, or **Toward Sound**.
+- **Velocity** (per voice), **mod wheel** (CC1) and **aftertouch**
+  (channel or poly pressure), each with a destination and amount.
+- **Toward Sound:** pick a training sound. Destinations set to Toward Sound
+  move along the line from home to that sound (1 = all the way). The
+  **Macro** knob (automatable) is that line as a single knob: the plan's
+  "macro direction A→B".
+- **Voice Spread:** each note starts at its own random offset (PC1–8).
+
+**Display:**
+- The sound map shows the heard point (filled orange), a 4-second fading
+  trail, and a small ring for each voice with its own point.
+- The envelope view shows the heard point while audio runs.
+
+**Implementation notes:**
+- Voices without their own modulation share one decoded-frame cache.
+- Voices with their own point decode their frames directly, costing two
+  frames per 32 samples per voice.
+- Everything is allocation-free on the audio thread.
+
+**Tests:**
+- Drift's spread (≈ Amount at full tether) and its bounds; low tether
+  wanders further.
+- Jumps hold without glide and are continuous with it.
+- Tours land exactly on training sounds; neighbour tours step only to near
+  ones.
+- LFO range and period.
+- The synth: the walk fades home when off, per-voice points differ,
+  velocity moves a voice, the LFO swings by its depth, mod wheel and macro
+  reach the direction sound.
+- The same seed with Restart repeats a phrase sample for sample; another
+  seed differs.
+- Synced steps follow the tempo.
+- Plugin: parameters reach the synth, a tour moves the heard point, CC1
+  reaches the sound, and the settings are saved.
+
+**Listening examples:** 09–14 (drift, jumps, tour, neighbour tour, per-voice
+walk, LFOs). `pcs-render` gained `--walk` and related options.
 
 ### Stage 6: Richer model
 - **Residual noise:** band energies of what the harmonics don't explain, as

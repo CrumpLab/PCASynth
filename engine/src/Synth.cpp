@@ -33,6 +33,15 @@ std::unique_ptr<Synth::ModelSlot> Synth::makeSlot (std::shared_ptr<const Model> 
     {
         slot->cache.assign (static_cast<size_t> (model->dims()), 0.0f);
         slot->stamps.assign (static_cast<size_t> (model->numFrames), 0);
+        for (int i = 0; i < model->numSounds(); ++i)
+        {
+            Point z {};
+            const auto zs = model->soundZ (i);
+            std::copy (zs.begin(), zs.end(), z.begin());
+            slot->soundZ.push_back (z);
+        }
+        for (int j = 0; j < model->numComponents(); ++j)
+            slot->relSd[static_cast<size_t> (j)] = static_cast<float> (model->sd (j) / model->sd (0));
     }
     slot->model = std::move (model);
     return slot;
@@ -61,6 +70,13 @@ void Synth::reset() noexcept
     sustainDown = false;
     for (int j = 0; j < kMaxComponents; ++j)
         zSmooth[static_cast<size_t> (j)] = j < params.activeComponents ? params.z[static_cast<size_t> (j)] * params.exaggerate : 0.0f;
+    heard = zSmooth;
+    walkSeed = params.mod.walk.seed;
+    walk.reset (walkSeed);
+    walkMix = params.mod.walk.enabled ? 1.0f : 0.0f;
+    for (size_t i = 0; i < lfos.size(); ++i)
+        lfos[i].reset (walkSeed + 101u * static_cast<uint32_t> (i + 1));
+    modWheel = pressure = 0.0f;
     ++stamp;
 }
 
@@ -119,6 +135,8 @@ void Synth::handle (const MidiEvent& e) noexcept
                 if (v.active)
                     setVoiceFrequency (v);
             break;
+        case MidiEvent::Type::ModWheel: modWheel = std::clamp (e.value, 0.0f, 1.0f); break;
+        case MidiEvent::Type::Pressure: pressure = std::clamp (e.value, 0.0f, 1.0f); break;
         case MidiEvent::Type::Sustain:
             sustainDown = e.value >= 0.5f;
             if (! sustainDown)
@@ -162,9 +180,31 @@ void Synth::noteOn (int note, float velocity) noexcept
         }
     }
 
+    // A note after silence restarts the shared walk (same seed -> same path).
+    if (params.mod.walk.restartOnNote)
+    {
+        bool held = false;
+        for (const auto& c : voices)
+            held = held || (c.active && ! c.releasing);
+        if (! held)
+            walk.reset (params.mod.walk.seed);
+    }
+
     v->active = true;
     v->releasing = false;
     v->sustained = false;
+    v->velocity = std::clamp (velocity, 0.0f, 1.0f);
+    v->walk.reset (params.mod.walk.seed * 7919u + static_cast<uint32_t> (noteCounter + 1));
+    v->spread = {};
+    if (params.mod.voiceSpread > 0.0f)
+        for (int j = 0; j < 8; ++j)
+        {
+            spreadRng ^= spreadRng << 13;
+            spreadRng ^= spreadRng >> 17;
+            spreadRng ^= spreadRng << 5;
+            const float u = static_cast<float> (spreadRng >> 8) / 16777216.0f;
+            v->spread[static_cast<size_t> (j)] = (2.0f * u - 1.0f) * 1.7320508f * params.mod.voiceSpread; // SD = voiceSpread
+        }
     v->note = note;
     v->age = ++noteCounter;
     const float sens = std::clamp (params.velocitySensitivity, 0.0f, 1.0f);
@@ -223,7 +263,7 @@ const float* Synth::frame (int t) noexcept
     float* dst = current->cache.data() + static_cast<size_t> (t) * static_cast<size_t> (m.numHarmonics);
     if (current->stamps[static_cast<size_t> (t)] != stamp)
     {
-        m.decodeFrame (t, zSmooth.data(), kMaxComponents, scratchDb.data());
+        m.decodeFrame (t, heard.data(), kMaxComponents, scratchDb.data());
         const float floorLin = std::pow (10.0f, m.floorDb / 20.0f);
         for (int h = 0; h < m.numHarmonics; ++h)
             dst[h] = std::max (0.0f, std::pow (10.0f, scratchDb[static_cast<size_t> (h)] / 20.0f) - floorLin);
@@ -232,15 +272,111 @@ const float* Synth::frame (int t) noexcept
     return dst;
 }
 
-void Synth::frameAt (double pos, float* dst) noexcept
+void Synth::frameAt (const Voice& v, double pos, float* dst) noexcept
 {
-    const int h = current->model->numHarmonics;
-    const int t0 = static_cast<int> (std::floor (pos));
-    const auto frac = static_cast<float> (pos - t0);
-    const float* a = frame (t0);
-    const float* b = frame (t0 + 1);
+    const auto& m = *current->model;
+    const int h = m.numHarmonics;
+    const int t0 = std::clamp (static_cast<int> (std::floor (pos)), 0, m.numFrames - 1);
+    const int t1 = std::min (t0 + 1, m.numFrames - 1);
+    const auto frac = static_cast<float> (pos - std::floor (pos));
+    if (! v.ownPoint)
+    {
+        const float* a = frame (t0);
+        const float* b = frame (t1);
+        for (int i = 0; i < h; ++i)
+            dst[i] = a[i] + frac * (b[i] - a[i]);
+        return;
+    }
+    // The voice's own point: decode both frames for it (no cache).
+    const float floorLin = std::pow (10.0f, m.floorDb / 20.0f);
+    m.decodeFrame (t0, v.point.data(), kMaxComponents, scratchDb.data());
+    m.decodeFrame (t1, v.point.data(), kMaxComponents, scratchC.data());
     for (int i = 0; i < h; ++i)
-        dst[i] = a[i] + frac * (b[i] - a[i]);
+    {
+        const float a = std::max (0.0f, std::pow (10.0f, scratchDb[static_cast<size_t> (i)] / 20.0f) - floorLin);
+        const float b = std::max (0.0f, std::pow (10.0f, scratchC[static_cast<size_t> (i)] / 20.0f) - floorLin);
+        dst[i] = a + frac * (b - a);
+    }
+}
+
+int Synth::voicePoints (Point* points, int max) const noexcept
+{
+    int n = 0;
+    for (const auto& v : voices)
+        if (v.active && n < max)
+            points[n++] = v.ownPoint ? v.point : heard;
+    return n;
+}
+
+void Synth::modulate (int n) noexcept
+{
+    const auto& mp = params.mod;
+    const auto& w = mp.walk;
+    const double dt = n / sr;
+    const double beat = 60.0 / std::max (1.0, params.bpm);
+
+    // The walk: restart on a new seed, retarget on a new mode, fade in and out.
+    if (w.seed != walkSeed)
+    {
+        walkSeed = w.seed;
+        walk.reset (walkSeed);
+    }
+    if (w.mode != walkMode)
+    {
+        walkMode = w.mode;
+        walk.reset (walkSeed);
+    }
+    const float fade = 1.0f - std::exp (-static_cast<float> (dt) / 0.1f);
+    walkMix += ((w.enabled ? 1.0f : 0.0f) - walkMix) * fade;
+    if (walkMix < 1e-4f && ! w.enabled)
+        walkMix = 0.0f;
+    const double step = w.sync ? w.syncBeats * beat : 1.0 / std::max (0.001f, w.rate);
+    const float shared = walkMix * (1.0f - std::clamp (w.perVoice, 0.0f, 1.0f));
+    const float own = walkMix * std::clamp (w.perVoice, 0.0f, 1.0f);
+    if (w.enabled)
+        walk.advance (dt, w, step, zSmooth, current->soundZ, current->relSd);
+
+    Point g = zSmooth;
+    for (size_t j = 0; j < g.size(); ++j)
+        g[j] += shared * walk.offset()[j];
+    for (size_t i = 0; i < lfos.size(); ++i)
+    {
+        const auto& lp = mp.lfo[i];
+        const float value = lfos[i].advance (dt, lp, lp.sync ? lp.syncBeats * beat : 1.0 / std::max (0.001f, lp.rate));
+        if (lp.enabled)
+            addToDestination (g, lp.target, lp.depth * value, mp, zSmooth);
+    }
+    addToDestination (g, mp.modWheel.destination, mp.modWheel.amount * modWheel, mp, zSmooth);
+    addToDestination (g, mp.pressure.destination, mp.pressure.amount * pressure, mp, zSmooth);
+    if (mp.macro != 0.0f)
+        addToDestination (g, kTowardSound, mp.macro, mp, zSmooth);
+    for (auto& v : g)
+        v = std::clamp (v, -8.0f, 8.0f);
+    if (g != heard)
+    {
+        heard = g;
+        ++stamp;
+    }
+
+    // Per-voice points: own walks, velocity and spread.
+    const bool perVoice = own > 0.0f || mp.velocity.destination >= 0 || mp.voiceSpread > 0.0f;
+    for (auto& v : voices)
+    {
+        if (! v.active)
+            continue;
+        v.ownPoint = perVoice;
+        if (! perVoice)
+            continue;
+        if (own > 0.0f)
+            v.walk.advance (dt, w, step, heard, current->soundZ, current->relSd);
+        auto& pt = v.point;
+        pt = heard;
+        for (size_t j = 0; j < pt.size(); ++j)
+            pt[j] += own * v.walk.offset()[j] + v.spread[j];
+        addToDestination (pt, mp.velocity.destination, mp.velocity.amount * v.velocity, mp, zSmooth);
+        for (auto& x : pt)
+            x = std::clamp (x, -8.0f, 8.0f);
+    }
 }
 
 void Synth::render (float* out, int n) noexcept
@@ -262,6 +398,7 @@ void Synth::render (float* out, int n) noexcept
     }
     if (moved)
         ++stamp;
+    modulate (n);
 
     for (auto& v : voices)
         if (v.active)
@@ -347,10 +484,10 @@ void Synth::renderVoice (Voice& v, float* out, int n) noexcept
 
     // Target amplitudes at the end of this sub-block.
     float* target = scratchA.data();
-    frameAt (v.pos, target);
+    frameAt (v, v.pos, target);
     if (crossfade)
     {
-        frameAt (v.pos - loopLen, scratchB.data());
+        frameAt (v, v.pos - loopLen, scratchB.data());
         const auto g = static_cast<float> (xfFrac);
         for (int h = 0; h < v.numHarmonics; ++h)
             target[h] += g * (scratchB[static_cast<size_t> (h)] - target[h]);

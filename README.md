@@ -13,13 +13,15 @@ bank of sine oscillators, so any pitch plays the learned timbre. See
 
 By [Matthew Crump](https://crumplab.com), Brooklyn College of CUNY.
 
-**Status: Stage 4 (version 0.4.0).** A playable VST3 (plus a Standalone
+**Status: Stage 5 (version 0.5.0).** A playable VST3 (plus a Standalone
 app) with its own UI:
 - a map of the sound space,
 - a four-corner morph pad,
-- a live view of the harmonics at the current point,
+- a live view of the harmonics,
 - component sliders,
-- training on your own audio inside the plugin.
+- training on your own audio,
+- movement: random walks through the space, LFOs, and velocity, mod wheel
+  and aftertouch mapped to directions in it.
 
 It has not yet been played in a DAW.
 
@@ -67,6 +69,39 @@ instrument. The zip also has a Standalone app for trying it without a DAW.
 - **Load Model…** or drop a `.pcsm` file on the window to play a saved
   space. **Save Model…** writes the current one. The space in use is saved
   inside your project.
+
+## Movement
+
+The **Random Walk** tab sets the point wandering. Switch it **On** and
+choose a mode:
+- **Drift:** slow Brownian wandering. **Tether** pulls it back home.
+- **Jumps:** a new random point every step. **Glide** turns the jumps into
+  sweeps.
+- **Tour:** travels from one training sound to another.
+- **Neighbour Tour:** travels to a similar sound each step, so it drifts
+  through families.
+
+Other walk settings:
+- **Amount** is how far it goes, in SD. In tours, 1 means arriving at each
+  sound.
+- **Rate** is steps per second, or turn on **Sync** to step with your DAW's
+  tempo.
+- **Components** and **Focus** choose what wanders.
+- **Per Voice** lets every note of a chord wander on its own.
+- **Seed** plus **Restart** repeats the same path each time you start
+  playing. **Freeze** holds it where it is.
+
+The map shows where the walk is (filled orange dot) and its recent trail.
+
+The **LFOs & Expression** tab has:
+- two LFOs that can target any component;
+- velocity, mod wheel and aftertouch routing;
+- **Toward Sound:** pick a training sound. Any source set to "Toward Sound",
+  and the **Macro** knob, moves the point along the line towards it. By
+  default the mod wheel does this.
+- **Spread:** each note of a chord starts at a slightly different point.
+
+![Random walk](docs/screenshot-walk.png)
 
 ## Training your own space
 

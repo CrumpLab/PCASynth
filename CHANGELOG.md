@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.5.0] - 2026-09-30
+
+### Stage 5: movement and expression
+- **Random walk** through the space. Modes: Drift (with Tether), Jumps (with
+  Glide), Tour (between training sounds) and Neighbour Tour (to similar
+  sounds).
+  - Amount, and Rate or tempo Sync.
+  - Components and Focus (equal, or by variance).
+  - Per Voice (every note wanders on its own).
+  - Seed, Restart on note (repeatable paths), Freeze.
+- **Two LFOs** (six shapes, Hz or synced), targeting any component or the
+  direction towards a chosen sound.
+- **Velocity, mod wheel and aftertouch** routing to a component or towards
+  the chosen sound. The **Macro** knob moves towards it too.
+- **Voice Spread:** each note starts at its own offset.
+- The sound map shows the heard point, its trail and each voice's point; the
+  envelope view follows the heard point.
+- New tabs under the map: Components, Random Walk, LFOs & Expression.
+- `pcs-render --walk ...` and listening examples 09–14.
+
 ## [0.4.0] - 2026-09-30
 
 ### Stage 4: training inside the plugin

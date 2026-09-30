@@ -27,7 +27,19 @@ void usage()
                  "    --speed X           envelope playback rate\n"
                  "    --tilt DB           brightness, dB per octave\n"
                  "    --release S         release time\n"
-                 "    --gain DB           output gain\n";
+                 "    --gain DB           output gain\n"
+                 "  movement (Stage 5):\n"
+                 "    --walk MODE         drift | jumps | tour | neighbour\n"
+                 "    --walk-amount SD    how far (tours: 1 = arrive at each sound)\n"
+                 "    --walk-rate HZ      steps per second (drift: speed)\n"
+                 "    --walk-glide G      0..1 (jumps and tours)\n"
+                 "    --walk-tether T     0..1 (drift)\n"
+                 "    --walk-dims N       components that wander (drift, jumps)\n"
+                 "    --walk-main         move in proportion to each component's variance\n"
+                 "    --walk-per-voice P  0..1: how independently each note wanders\n"
+                 "    --walk-seed N\n"
+                 "    --lfo PC,HZ,DEPTH   a sine LFO on component PC (1-based)\n"
+                 "    --spread SD         voice spread\n";
 }
 } // namespace
 
@@ -69,6 +81,28 @@ int main (int argc, char** argv)
             {
                 const auto l = pcs::tools::parseFloats (next());
                 if (l.size() == 2) { p.loopStart = l[0]; p.loopEnd = l[1]; }
+            }
+            else if (a == "--walk")
+            {
+                const auto m = next();
+                p.mod.walk.enabled = true;
+                p.mod.walk.mode = m == "jumps" ? pcs::WalkMode::Jumps : m == "tour" ? pcs::WalkMode::Tour
+                                : m == "neighbour" ? pcs::WalkMode::NeighbourTour : pcs::WalkMode::Drift;
+            }
+            else if (a == "--walk-amount") p.mod.walk.amount = std::stof (next());
+            else if (a == "--walk-rate") p.mod.walk.rate = std::stof (next());
+            else if (a == "--walk-glide") p.mod.walk.glide = std::stof (next());
+            else if (a == "--walk-tether") p.mod.walk.tether = std::stof (next());
+            else if (a == "--walk-dims") p.mod.walk.dims = std::stoi (next());
+            else if (a == "--walk-main") p.mod.walk.focus = pcs::WalkFocus::Main;
+            else if (a == "--walk-per-voice") p.mod.walk.perVoice = std::stof (next());
+            else if (a == "--walk-seed") p.mod.walk.seed = static_cast<uint32_t> (std::stoul (next()));
+            else if (a == "--spread") p.mod.voiceSpread = std::stof (next());
+            else if (a == "--lfo")
+            {
+                const auto v = pcs::tools::parseFloats (next());
+                if (v.size() == 3)
+                    p.mod.lfo[0] = { true, pcs::LfoShape::Sine, v[1], false, 4.0f, v[2], static_cast<int> (v[0]) - 1 };
             }
             else if (a == "--mode")
             {

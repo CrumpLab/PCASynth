@@ -39,6 +39,12 @@ private:
     int ax = 0, ay = 1;
     float range = 3.0f;
     PCASynthProcessor::Point point {};
+    // Stage 5: where the modulation takes the point (while audio runs), its
+    // recent path, and each voice's own point.
+    PCASynthProcessor::Point heard {};
+    bool showHeard = false;
+    std::vector<juce::Point<float>> trail; // in space units (the current axes)
+    std::vector<juce::Point<float>> voices;
     int hover = -1;
     bool dragging = false;
 };

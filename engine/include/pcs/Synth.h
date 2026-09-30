@@ -1,6 +1,7 @@
 #pragma once
 
 #include "pcs/Model.h"
+#include "pcs/Modulation.h"
 
 #include <array>
 #include <cstdint>
@@ -37,15 +38,18 @@ struct SynthParams
     float morphTime = 0.05f;                // s, smoothing of moves in the space
     int maxHarmonics = 128;
     int polyphony = 16;
+    ModParams mod;                          // random walk, LFOs, expression (Stage 5)
+    double bpm = 120.0;                     // for synced walk steps and LFOs
 };
 
 struct MidiEvent
 {
-    enum class Type { NoteOn, NoteOff, PitchBend, Sustain, AllNotesOff };
+    enum class Type { NoteOn, NoteOff, PitchBend, Sustain, AllNotesOff, ModWheel, Pressure };
     int offset = 0;      // sample within the block
     Type type = Type::NoteOn;
     int note = 60;
-    float value = 1.0f;  // NoteOn: velocity 0..1; PitchBend: -1..1; Sustain: pedal down when >= 0.5
+    float value = 1.0f;  // NoteOn: velocity 0..1; PitchBend: -1..1; Sustain: pedal down when >= 0.5;
+                         // ModWheel, Pressure: 0..1
 };
 
 // Polyphonic additive synth that plays points of a Model. Each voice runs a
@@ -65,6 +69,8 @@ public:
         std::shared_ptr<const Model> model;
         std::vector<float> cache;       // numFrames × numHarmonics, linear amplitude
         std::vector<uint32_t> stamps;   // per frame: point the cache was decoded for
+        std::vector<Point> soundZ;      // training sounds' coordinates (for walk tours)
+        Point relSd {};                 // each component's SD relative to PC1
     };
     static std::unique_ptr<ModelSlot> makeSlot (std::shared_ptr<const Model> model); // allocates
 
@@ -87,8 +93,13 @@ public:
     // Where each sounding voice is in the envelope (frames), for displays.
     // Returns how many were written (at most `max`).
     int voicePositions (float* positions, int max) const noexcept;
-    // Smoothed point currently heard.
+    // Smoothed point set by the parameters (home), and the point heard after
+    // the shared modulation (walk, LFOs, mod wheel, pressure, macro).
     const std::array<float, kMaxComponents>& currentZ() const noexcept { return zSmooth; }
+    const Point& heardPoint() const noexcept { return heard; }
+    // Where each sounding voice is in the space (with its own modulation).
+    int voicePoints (Point* points, int max) const noexcept;
+    int walkSound() const noexcept { return walk.currentSound(); } // tours: the sound it is heading to
 
 private:
     struct Voice
@@ -106,6 +117,11 @@ private:
         double freq = 0.0;
         int numHarmonics = 0;
         std::array<float, kMaxHarmonics> re {}, im {}, cr {}, ci {}, amp {};
+        float velocity = 1.0f;
+        RandomWalk walk;     // the voice's own walk (Walk Per Voice)
+        Point spread {};     // Voice Spread offset
+        Point point {};      // the voice's point this sub-block
+        bool ownPoint = false;
     };
 
     void handle (const MidiEvent& e) noexcept;
@@ -115,7 +131,8 @@ private:
     void render (float* out, int n) noexcept;
     void renderVoice (Voice& v, float* out, int n) noexcept;
     const float* frame (int t) noexcept; // linear amplitudes at the smoothed point, cached
-    void frameAt (double pos, float* dst) noexcept;
+    void frameAt (const Voice& v, double pos, float* dst) noexcept;
+    void modulate (int n) noexcept;
 
     double sr = 48000.0;
     std::unique_ptr<ModelSlot> current;
@@ -125,6 +142,15 @@ private:
     float bend = 0.0f;
     bool sustainDown = false;
 
+    // Modulation state.
+    RandomWalk walk;
+    std::array<Lfo, 2> lfos;
+    float modWheel = 0.0f, pressure = 0.0f, walkMix = 0.0f;
+    uint32_t walkSeed = 0;
+    WalkMode walkMode = WalkMode::Drift;
+    uint32_t spreadRng = 12345;
+    Point heard {};
+    std::array<float, kMaxHarmonics> scratchC {};
     std::array<float, kMaxComponents> zSmooth {};
     uint32_t stamp = 1;
     std::array<float, kMaxHarmonics> scratchDb {}, scratchA {}, scratchB {};

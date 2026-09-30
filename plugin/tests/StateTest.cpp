@@ -311,6 +311,61 @@ int main()
         dir.deleteRecursively();
     }
 
+    // ---- Stage 5: movement and expression ----
+    {
+        auto w = fresh();
+        setParam (*w, "walk_on", 1.0f);
+        setParam (*w, "walk_mode", 2.0f);  // Tour
+        setParam (*w, "walk_rate", 2.0f);
+        setParam (*w, "walk_seed", 17.0f);
+        setParam (*w, "walk_sync", 1.0f);
+        setParam (*w, "walk_sync_len", 2.0f); // 1/4
+        setParam (*w, "lfo2_on", 1.0f);
+        setParam (*w, "lfo2_target", 16.0f);  // Toward Sound
+        setParam (*w, "vel_dest", 4.0f);      // PC4 (Off is first)
+        const auto sp = w->currentSynthParams();
+        check (sp.mod.walk.enabled && sp.mod.walk.mode == pcs::WalkMode::Tour && sp.mod.walk.seed == 17
+                   && sp.mod.walk.sync && std::abs (sp.mod.walk.syncBeats - 1.0f) < 1e-6f && sp.mod.lfo[1].enabled
+                   && sp.mod.lfo[1].target == pcs::kTowardSound && sp.mod.velocity.destination == 3,
+               "movement parameters reach the synth");
+        setParam (*w, "lfo2_on", 0.0f);
+        setParam (*w, "vel_dest", 0.0f);
+
+        // The walk moves what is heard; the home point stays put.
+        const auto walked = playNote (*w, 60, 2.0, 2.0);
+        const auto heard = w->getHeardPoint(), home = w->getPoint();
+        float moved = 0.0f;
+        for (size_t j = 0; j < heard.size(); ++j)
+            moved = std::max (moved, std::abs (heard[j] - home[j]));
+        check (rms (walked, 0.2, 1.8) > 0.005 && moved > 0.1f && near (home[0], 0.0f), "a tour moves the heard point");
+
+        setParam (*w, "walk_on", 0.0f);
+        playNote (*w, 60, 1.0, 1.0);
+        const auto back = w->getHeardPoint();
+        check (near (back[0], 0.0f) && near (back[5], 0.0f), "and it glides home when the walk stops");
+
+        // Mod wheel towards a sound.
+        w->setDirectionSound ("brass_2");
+        setParam (*w, "mw_dest", 17.0f); // Toward Sound
+        setParam (*w, "mw_amount", 1.0f);
+        juce::AudioBuffer<float> wheelBuf (2, 512);
+        juce::MidiBuffer wheel;
+        wheel.addEvent (juce::MidiMessage::controllerEvent (1, 1, 127), 0);
+        w->processBlock (wheelBuf, wheel);
+        const auto target = w->getModel()->soundZ (w->getModel()->soundIndex ("brass_2"));
+        const auto atWheel = w->getHeardPoint();
+        bool reached = true;
+        for (size_t j = 0; j < target.size(); ++j)
+            reached = reached && std::abs (atWheel[j] - target[j]) < 1e-3f;
+        check (reached, "mod wheel up reaches the direction sound");
+
+        juce::MemoryBlock ws;
+        w->getStateInformation (ws);
+        auto w2 = fresh();
+        w2->setStateInformation (ws.getData(), static_cast<int> (ws.getSize()));
+        check (w2->getDirectionSound() == "brass_2" && near (getParam (*w2, "walk_seed"), 17.0f), "direction sound and walk settings are saved");
+    }
+
     std::printf (failures == 0 ? "all plugin checks passed\n" : "%d plugin checks FAILED\n", failures);
     return failures == 0 ? 0 : 1;
 }

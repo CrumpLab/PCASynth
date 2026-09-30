@@ -18,10 +18,30 @@ inline const juce::String components = "components", exaggerate = "exaggerate", 
                           playMode = "play_mode", loopStart = "loop_start", loopEnd = "loop_end",
                           scanPosition = "scan_position", speed = "speed", attack = "attack", release = "release",
                           brightness = "brightness", harmonics = "harmonics", velocity = "velocity",
-                          bendRange = "bend_range", polyphony = "polyphony", gain = "gain";
+                          bendRange = "bend_range", polyphony = "polyphony", gain = "gain",
+                          // Stage 5: movement and expression
+                          walkOn = "walk_on", walkMode = "walk_mode", walkAmount = "walk_amount", walkRate = "walk_rate",
+                          walkSync = "walk_sync", walkSyncLen = "walk_sync_len", walkGlide = "walk_glide",
+                          walkTether = "walk_tether", walkDims = "walk_dims", walkFocus = "walk_focus",
+                          walkPerVoice = "walk_per_voice", walkSeed = "walk_seed", walkRestart = "walk_restart",
+                          walkFreeze = "walk_freeze", velDest = "vel_dest", velAmount = "vel_amount", mwDest = "mw_dest",
+                          mwAmount = "mw_amount", atDest = "at_dest", atAmount = "at_amount", macro = "macro",
+                          voiceSpread = "voice_spread";
+inline juce::String lfo (int n, const char* what) { return "lfo" + juce::String (n + 1) + "_" + what; }
 }
 
 inline juce::StringArray playModeNames() { return { "One-shot", "Loop", "Ping-pong", "Scan" }; }
+inline juce::StringArray walkModeNames() { return { "Drift", "Jumps", "Tour", "Neighbour Tour" }; }
+inline juce::StringArray walkFocusNames() { return { "Equal", "Main components" }; }
+inline juce::StringArray lfoShapeNames() { return { "Sine", "Triangle", "Saw", "Square", "Sample & Hold", "Smooth Random" }; }
+inline juce::StringArray syncNames() { return { "1/16", "1/8", "1/4", "1/2", "1 bar", "2 bars", "4 bars", "8 bars", "16 bars" }; }
+inline float syncBeats (int index)
+{
+    static const float beats[] = { 0.25f, 0.5f, 1.0f, 2.0f, 4.0f, 8.0f, 16.0f, 32.0f, 64.0f };
+    return beats[juce::jlimit (0, 8, index)];
+}
+// LFO targets: PC1..PC16, Toward Sound. Expression adds "Off" first.
+juce::StringArray targetNames (bool withOff);
 
 juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
 
@@ -37,6 +57,14 @@ private:
     std::array<std::atomic<float>*, kNumPcParams> pc {};
     std::atomic<float>*components, *exaggerate, *morphTime, *playMode, *loopStart, *loopEnd, *scanPosition, *speed,
         *attack, *release, *brightness, *harmonics, *velocity, *bendRange, *polyphony, *gain;
+    std::atomic<float>*walkOn, *walkMode, *walkAmount, *walkRate, *walkSync, *walkSyncLen, *walkGlide, *walkTether, *walkDims,
+        *walkFocus, *walkPerVoice, *walkSeed, *walkRestart, *walkFreeze, *velDest, *velAmount, *mwDest, *mwAmount, *atDest,
+        *atAmount, *macro, *voiceSpread;
+    struct LfoRefs
+    {
+        std::atomic<float>*on, *shape, *rate, *sync, *syncLen, *depth, *target;
+    };
+    std::array<LfoRefs, 2> lfos {};
 };
 
 } // namespace pcsplugin

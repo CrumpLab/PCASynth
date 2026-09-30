@@ -322,6 +322,80 @@ int main (int argc, char** argv)
                    "Scan mode: one held note whose position in " + name + "'s envelope moves from start to end over 8 s.");
         }
 
+        // 9-13. Stage 5: the random walk and LFOs, under a slow chord progression.
+        {
+            const std::vector<std::vector<int>> chords { { 48, 55, 64, 71 }, { 45, 52, 60, 67 }, { 41, 48, 57, 64 }, { 43, 50, 59, 62 } };
+            auto pad = [&chords] (double seconds) {
+                std::vector<Note> ns;
+                for (int c = 0; c * 4.0 < seconds - 0.5; ++c)
+                    for (int n : chords[static_cast<size_t> (c) % chords.size()])
+                        ns.push_back ({ 4.0 * c, 3.95, n, 0.7f });
+                return ns;
+            };
+            auto base = [] {
+                SynthParams p;
+                p.mode = PlayMode::PingPong;
+                p.loopStart = 0.15f;
+                p.loopEnd = 0.6f;
+                p.release = 1.0f;
+                p.gainDb = -12.0f;
+                p.mod.walk.enabled = true;
+                p.mod.walk.seed = 7;
+                return p;
+            };
+            const double len = 24.0;
+
+            auto drift = base();
+            drift.mod.walk.mode = WalkMode::Drift;
+            drift.mod.walk.rate = 0.3f;
+            drift.mod.walk.amount = 1.2f;
+            drift.mod.walk.dims = 6;
+            write ("09_walk_drift", renderNotes (model, drift, pad (len), len + 1.0),
+                   "Random walk, Drift: slow Brownian wandering over PC1-6 (Amount 1.2 SD, Rate 0.3 Hz, Tether 50 %).");
+
+            auto jumps = base();
+            jumps.mod.walk.mode = WalkMode::Jumps;
+            jumps.mod.walk.rate = 2.0f;
+            jumps.mod.walk.glide = 0.15f;
+            jumps.mod.walk.amount = 1.5f;
+            jumps.mod.walk.dims = 4;
+            jumps.mode = PlayMode::Loop;
+            std::vector<Note> pulse;
+            for (int i = 0; i < 48; ++i)
+                pulse.push_back ({ 0.5 * i, 0.45, i % 8 < 4 ? 48 + (i % 4) * 7 : 45 + (i % 4) * 5, 0.8f });
+            write ("10_walk_jumps", renderNotes (model, jumps, pulse, len + 1.0),
+                   "Random walk, Jumps: a new random point every half second with a short glide, over repeated notes.");
+
+            auto tour = base();
+            tour.mod.walk.mode = WalkMode::Tour;
+            tour.mod.walk.rate = 0.35f;
+            tour.mod.walk.glide = 0.6f;
+            write ("11_walk_tour", renderNotes (model, tour, pad (len), len + 1.0),
+                   "Random walk, Tour: glides from training sound to training sound (random order), resting on each.");
+
+            auto neighbour = tour;
+            neighbour.mod.walk.mode = WalkMode::NeighbourTour;
+            write ("12_walk_neighbour_tour", renderNotes (model, neighbour, pad (len), len + 1.0),
+                   "Random walk, Neighbour Tour: each step goes to one of the three most similar sounds, so it drifts through families.");
+
+            auto voices = base();
+            voices.mod.walk.mode = WalkMode::Drift;
+            voices.mod.walk.rate = 0.5f;
+            voices.mod.walk.amount = 1.0f;
+            voices.mod.walk.perVoice = 1.0f;
+            voices.mod.walk.dims = 6;
+            voices.mod.voiceSpread = 0.6f;
+            write ("13_walk_per_voice", renderNotes (model, voices, pad (len), len + 1.0),
+                   "Every note of each chord wanders on its own (Walk Per Voice 100 %, Voice Spread 0.6 SD).");
+
+            auto lfo = base();
+            lfo.mod.walk.enabled = false;
+            lfo.mod.lfo[0] = { true, LfoShape::Sine, 0.25f, false, 4.0f, 2.0f, 0 };
+            lfo.mod.lfo[1] = { true, LfoShape::SmoothRandom, 1.5f, false, 4.0f, 1.0f, 1 };
+            write ("14_lfos", renderNotes (model, lfo, pad (16.0), 17.0),
+                   "Two LFOs: a slow sine on PC1 (±2 SD, 4 s cycle) and a smooth random LFO on PC2 (±1 SD).");
+        }
+
         writeMap (outDir / "map.svg");
         std::cout << "  map.svg\n";
     }

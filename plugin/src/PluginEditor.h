@@ -3,6 +3,7 @@
 #include "Controls.h"
 #include "EnvelopeView.h"
 #include "MorphPad.h"
+#include "ParamGrid.h"
 #include "PluginProcessor.h"
 #include "SoundMap.h"
 #include "Theme.h"
@@ -36,6 +37,7 @@ public:
     MorphPad& getMorphPad() noexcept { return morphPad; }
     EnvelopeView& getEnvelopeView() noexcept { return envelope; }
     TrainPanel& getTrainPanel() noexcept { return trainPanel; }
+    void selectTab (int index) { showTab (index); }
 
 private:
     void changeListenerCallback (juce::ChangeBroadcaster*) override { refreshModel(); }
@@ -59,6 +61,11 @@ private:
     ComponentStrip strip;
     ControlPanel controls;
     TrainPanel trainPanel;
+    WalkPanel walkPanel;
+    ModPanel modPanel;
+    std::array<juce::TextButton, 3> tabs { juce::TextButton ("Components"), juce::TextButton ("Random Walk"),
+                                           juce::TextButton ("LFOs & Expression") };
+    void showTab (int index);
     std::unique_ptr<juce::FileChooser> chooser;
     juce::int64 messageUntil = 0;
     bool dragging = false;
