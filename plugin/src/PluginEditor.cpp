@@ -6,7 +6,7 @@ constexpr int kDefaultWidth = 1180, kDefaultHeight = 840;
 } // namespace
 
 PCASynthEditor::PCASynthEditor (PCASynthProcessor& p)
-    : AudioProcessorEditor (p), processor (p), soundMap (p), morphPad (p), envelope (p), strip (p), controls (p), trainPanel (p), walkPanel (p), modPanel (p)
+    : AudioProcessorEditor (p), processor (p), soundMap (p), morphPad (p), envelope (p), strip (p), controls (p), trainPanel (p), walkPanel (p), modPanel (p), mpePanel (p)
 {
     setLookAndFeel (&lookAndFeel);
     title.setText ("PCASynth", juce::dontSendNotification);
@@ -22,6 +22,7 @@ PCASynthEditor::PCASynthEditor (PCASynthProcessor& p)
     addChildComponent (trainPanel);
     addChildComponent (walkPanel);
     addChildComponent (modPanel);
+    addChildComponent (mpePanel);
     for (size_t i = 0; i < tabs.size(); ++i)
     {
         auto& t = tabs[i];
@@ -108,6 +109,7 @@ void PCASynthEditor::showTab (int index)
     strip.setVisible (index == 0);
     walkPanel.setVisible (index == 1);
     modPanel.setVisible (index == 2);
+    mpePanel.setVisible (index == 3);
     processor.setUiValue ("tab", index);
 }
 
@@ -146,6 +148,7 @@ void PCASynthEditor::refresh()
     trainPanel.refresh();
     walkPanel.refresh();
     modPanel.refresh();
+    mpePanel.refresh();
     soundMap.refresh();
     envelope.refresh();
     strip.refresh();
@@ -293,6 +296,7 @@ void PCASynthEditor::resized()
     strip.setBounds (r);
     walkPanel.setBounds (r);
     modPanel.setBounds (r);
+    mpePanel.setBounds (r);
     controls.setBounds (controlsArea);
 
     trainPanel.setBounds (top);

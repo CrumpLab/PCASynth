@@ -366,6 +366,60 @@ int main()
         check (w2->getDirectionSound() == "brass_2" && near (getParam (*w2, "walk_seed"), 17.0f), "direction sound and walk settings are saved");
     }
 
+    // ---- Stage 6: MPE ----
+    {
+        auto m = fresh();
+        check (m->supportsMPE(), "declares MPE support to the host");
+
+        // The controller's MPE Configuration Message (RPN 6 on channel 1, 15 members)
+        // and per-note bend range (RPN 0 on a member channel: 24 semitones).
+        juce::MidiBuffer setup;
+        for (const auto& msg : { juce::MidiMessage::controllerEvent (1, 101, 0), juce::MidiMessage::controllerEvent (1, 100, 6),
+                                 juce::MidiMessage::controllerEvent (1, 6, 15), juce::MidiMessage::controllerEvent (2, 101, 0),
+                                 juce::MidiMessage::controllerEvent (2, 100, 0), juce::MidiMessage::controllerEvent (2, 6, 24) })
+            setup.addEvent (msg, 0);
+        juce::AudioBuffer<float> mb (2, 512);
+        m->processBlock (mb, setup);
+        m->applyControllerSetup();
+        check (near (getParam (*m, "mpe_on"), 1.0f) && near (getParam (*m, "mpe_zone"), 0.0f) && near (getParam (*m, "mpe_bend_range"), 24.0f),
+               "the controller's MPE configuration turns MPE on and sets the bend range");
+
+        // Two notes; bend, press and slide one of them.
+        juce::MidiBuffer notes;
+        notes.addEvent (juce::MidiMessage::noteOn (2, 60, 0.8f), 0);
+        notes.addEvent (juce::MidiMessage::noteOn (3, 67, 0.8f), 0);
+        notes.addEvent (juce::MidiMessage::pitchWheel (3, 8192 + 4096), 1);   // +12 st at 24
+        notes.addEvent (juce::MidiMessage::channelPressureChange (3, 127), 1);
+        notes.addEvent (juce::MidiMessage::controllerEvent (3, 74, 127), 1);
+        m->processBlock (mb, notes);
+        juce::MidiBuffer none;
+        for (int i = 0; i < 20; ++i)
+            m->processBlock (mb, none);
+        pcs::Synth::VoiceInfo info[4];
+        const int n = m->getVoiceInfo (info, 4);
+        bool ok = n == 2;
+        for (int i = 0; i < n; ++i)
+        {
+            const bool pressed = info[i].note == 67;
+            ok = ok && info[i].channel == (pressed ? 3 : 2)
+              && std::abs (info[i].bendSemitones - (pressed ? 12.0f : 0.0f)) < 0.01f
+              && std::abs (info[i].pressure - (pressed ? 1.0f : 0.0f)) < 0.01f;
+        }
+        check (ok, "per-note bend and pressure reach only their own note");
+
+        PCASynthProcessor::Point pts[4];
+        const int np = m->getVoicePoints (pts, 4);
+        check (np == 2 && std::abs (std::abs (pts[0][0] - pts[1][0]) - 1.5f) < 0.02f && std::abs (std::abs (pts[0][1] - pts[1][1]) - 1.0f) < 0.02f,
+               "pressure moves its note 1.5 SD along PC1 and slide 1 SD along PC2 (defaults)");
+
+        // MPE off: the same stream is ordinary MIDI (channel bends are global).
+        auto o = fresh();
+        o->processBlock (mb, notes);
+        const int no = o->getVoiceInfo (info, 4);
+        check (no == 2 && std::abs (info[0].bendSemitones) < 1e-6f && std::abs (info[1].bendSemitones) < 1e-6f,
+               "with MPE off, channels are ignored as before");
+    }
+
     std::printf (failures == 0 ? "all plugin checks passed\n" : "%d plugin checks FAILED\n", failures);
     return failures == 0 ? 0 : 1;
 }

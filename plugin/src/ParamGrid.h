@@ -16,7 +16,7 @@ public:
     juce::Slider& knob (const juce::String& paramId, const juce::String& label);
     juce::ComboBox& menu (const juce::String& paramId, const juce::String& label, int widthCells = 1);
     juce::ToggleButton& toggle (const juce::String& paramId, const juce::String& label);
-    void custom (juce::Component& c, const juce::String& label, int widthCells = 1);
+    void custom (juce::Component& c, const juce::String& label, int widthCells = 1, bool fillCell = false);
     // Knobs added after this are compact horizontal bars (for two-row panels).
     void setCompact (bool c) { compact = c; }
 
@@ -36,6 +36,7 @@ private:
         juce::Component* component = nullptr;
         std::unique_ptr<juce::Label> label;
         int cells = 1;
+        bool fill = false; // custom components that take the whole cell
     };
     struct Group
     {
@@ -79,4 +80,30 @@ private:
     juce::ComboBox directionBox;
     std::array<juce::Slider*, 2> lfoRate {};
     std::array<juce::ComboBox*, 2> lfoCycle {};
+};
+
+// Each sounding note's per-note expression: channel, bend, pressure, slide.
+class NoteMonitor final : public juce::Component
+{
+public:
+    explicit NoteMonitor (PCASynthProcessor& p) : processor (p) {}
+    void refresh();
+    void paint (juce::Graphics&) override;
+
+private:
+    PCASynthProcessor& processor;
+    std::array<pcs::Synth::VoiceInfo, PCASynthProcessor::kMaxShownVoices> info {};
+    int count = 0;
+};
+
+// MPE (Stage 6): zone and ranges, where pressure and slide move each note, and
+// a monitor of what the controller sends.
+class MpePanel final : public ParamGrid
+{
+public:
+    explicit MpePanel (PCASynthProcessor& p);
+    void refresh() override;
+
+private:
+    NoteMonitor monitor;
 };

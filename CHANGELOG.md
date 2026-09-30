@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.6.0] - 2026-09-30
+
+### Stage 6: MPE (for the Osmose)
+- Per-note pitch bend (Note Bend Range, default 48 semitones); the master
+  channel bends everything. Lower or upper zone.
+- Per-note pressure (channel pressure or poly aftertouch) and slide (CC74),
+  each routed to a component or toward a chosen sound. Pressure has a curve
+  and smoothing; slide is bipolar or unipolar.
+- Values sent before a note-on apply to that note. Released notes keep
+  their expression when their channel is reused.
+- Declares MPE support to the host. Reads the controller's MPE
+  Configuration Message and bend-range RPN.
+- MPE tab with a live per-note monitor. The envelope view follows the most
+  recent note.
+- With MPE off, MIDI behaves exactly as before.
+
+### Fixed
+- Random-walk step timing could drift by one tick on Apple Silicon, which
+  failed the neighbour-tour test in the macOS CI.
+
 ## [0.5.0] - 2026-09-30
 
 ### Stage 5: movement and expression

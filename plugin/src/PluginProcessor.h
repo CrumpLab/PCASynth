@@ -37,6 +37,7 @@ public:
     bool acceptsMidi() const override { return true; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
+    bool supportsMPE() const override { return true; }
     double getTailLengthSeconds() const override;
 
     int getNumPrograms() override { return 1; }
@@ -106,12 +107,19 @@ public:
     }
     static constexpr int kMaxShownVoices = 16;
 
+    // Stage 6: per-note expression of the sounding voices (for the MPE tab),
+    // and the most recent note's point (for the envelope view).
+    int getVoiceInfo (pcs::Synth::VoiceInfo* out, int max) const;
+    bool getNewestVoicePoint (Point& out) const noexcept;
+
     // Editor settings saved with the state (map axes, morph corners, ...).
     juce::var getUiValue (const juce::Identifier& key, const juce::var& fallback) const;
     void setUiValue (const juce::Identifier& key, const juce::var& value);
 
     // Frees a model the audio thread has let go of (the timer calls this).
     void collectGarbage() { delete retired.exchange (nullptr); }
+    // Applies MPE setup the controller sent (zone, bend range) to the parameters (the timer calls this).
+    void applyControllerSetup();
 
     static constexpr int kStateVersion = 1;
 
@@ -145,6 +153,24 @@ private:
     std::atomic<double> bpm { 120.0 };
     std::atomic<juce::uint32> lastBlockMs { 0 };
     std::atomic<bool> hasProcessed { false };
+
+    // MPE voice display (audio thread writes with a try-lock; the editor copies).
+    mutable juce::SpinLock voiceInfoLock;
+    std::array<pcs::Synth::VoiceInfo, kMaxShownVoices> voiceInfos {};
+    int numVoiceInfos = 0;
+    std::array<std::atomic<float>, pcs::kMaxComponents> newestPoint {};
+    std::atomic<bool> hasNewest { false };
+
+    // MPE setup from the controller: RPN 6 (MPE Configuration Message) sets the
+    // zone and turns MPE on; RPN 0 on a member channel sets the note bend
+    // range. Parsed on the audio thread, applied to parameters by the timer.
+    struct Rpn
+    {
+        int msb = 127, lsb = 127, dataMsb = 0;
+    };
+    std::array<Rpn, 17> rpn {};
+    std::atomic<int> pendingZone { -1 }, pendingBendRange { -1 };
+    void parseRpn (const juce::MidiMessage& m) noexcept;
     void resolveDirection();
     std::shared_ptr<std::atomic<bool>> alive = std::make_shared<std::atomic<bool>> (true);
 

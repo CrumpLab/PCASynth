@@ -19,6 +19,21 @@ enum class PlayMode
     Scan,     // hold a single moment of the envelope (Scan Position), like a wavetable
 };
 
+// MPE (Stage 6): per-note pitch bend, pressure and slide from controllers
+// such as the Osmose. Notes on member channels follow their channel's
+// messages until key-up; the master channel's bend and pressure stay global.
+struct MpeParams
+{
+    bool enabled = false;
+    bool upperZone = false;          // lower: master 1, members 2-16; upper: master 16, members 1-15
+    float noteBendRange = 48.0f;     // semitones for a member channel's full bend
+    Expression pressure { 0, 1.5f }; // destination + amount at full pressure (default PC1)
+    float pressureCurve = 0.0f;      // -1..1: >0 more response to a light touch, <0 less
+    float smoothing = 0.02f;         // s, for pressure and slide
+    Expression slide { 1, 1.0f };    // CC74 (default PC2)
+    bool slideBipolar = true;        // true: centre (64) = no move, else 0 = no move
+};
+
 struct SynthParams
 {
     std::array<float, kMaxComponents> z {}; // point in PCA space (SD units)
@@ -39,17 +54,19 @@ struct SynthParams
     int maxHarmonics = 128;
     int polyphony = 16;
     ModParams mod;                          // random walk, LFOs, expression (Stage 5)
+    MpeParams mpe;                          // per-note expression (Stage 6)
     double bpm = 120.0;                     // for synced walk steps and LFOs
 };
 
 struct MidiEvent
 {
-    enum class Type { NoteOn, NoteOff, PitchBend, Sustain, AllNotesOff, ModWheel, Pressure };
+    enum class Type { NoteOn, NoteOff, PitchBend, Sustain, AllNotesOff, ModWheel, Pressure, PolyPressure, Slide };
     int offset = 0;      // sample within the block
     Type type = Type::NoteOn;
     int note = 60;
     float value = 1.0f;  // NoteOn: velocity 0..1; PitchBend: -1..1; Sustain: pedal down when >= 0.5;
-                         // ModWheel, Pressure: 0..1
+                         // ModWheel, Pressure, PolyPressure, Slide (CC74): 0..1
+    int channel = 0;     // 1-16 (0: unknown). Only MPE mode looks at it.
 };
 
 // Polyphonic additive synth that plays points of a Model. Each voice runs a
@@ -100,6 +117,19 @@ public:
     // Where each sounding voice is in the space (with its own modulation).
     int voicePoints (Point* points, int max) const noexcept;
     int walkSound() const noexcept { return walk.currentSound(); } // tours: the sound it is heading to
+    // The point of the most recently played voice still sounding (false if none).
+    bool newestVoicePoint (Point& out) const noexcept;
+
+    // Per-note expression of each sounding voice (for displays).
+    struct VoiceInfo
+    {
+        int note = 0, channel = 0;
+        float bendSemitones = 0.0f; // per-note bend
+        float pressure = 0.0f;      // shaped and smoothed, 0..1
+        float slide = 0.0f;         // smoothed, 0..1
+        bool releasing = false;
+    };
+    int voiceInfo (VoiceInfo* out, int max) const noexcept;
 
 private:
     struct Voice
@@ -122,11 +152,17 @@ private:
         Point spread {};     // Voice Spread offset
         Point point {};      // the voice's point this sub-block
         bool ownPoint = false;
+        // MPE
+        int channel = 0;
+        bool follows = false; // still following its member channel (until key-up)
+        float noteBend = 0.0f, pressure = 0.0f, slide = 0.5f; // latest raw values
+        float pressureSmooth = 0.0f, slideSmooth = 0.5f;
     };
 
     void handle (const MidiEvent& e) noexcept;
-    void noteOn (int note, float velocity) noexcept;
-    void noteOff (int note) noexcept;
+    void noteOn (int note, float velocity, int channel) noexcept;
+    void noteOff (int note, int channel) noexcept;
+    bool isMemberChannel (int channel) const noexcept;
     void setVoiceFrequency (Voice& v) noexcept;
     void render (float* out, int n) noexcept;
     void renderVoice (Voice& v, float* out, int n) noexcept;
@@ -151,6 +187,9 @@ private:
     uint32_t spreadRng = 12345;
     Point heard {};
     std::array<float, kMaxHarmonics> scratchC {};
+
+    // MPE: each channel's latest per-note values (index 1..16).
+    std::array<float, 17> chBend {}, chPressure {}, chSlide {};
     std::array<float, kMaxComponents> zSmooth {};
     uint32_t stamp = 1;
     std::array<float, kMaxHarmonics> scratchDb {}, scratchA {}, scratchB {};

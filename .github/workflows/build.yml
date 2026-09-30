@@ -49,6 +49,7 @@ jobs:
           xvfb-run -a build/plugin/pcs-ui-snapshot ui/editor-train.png 1180 840 train
           xvfb-run -a build/plugin/pcs-ui-snapshot ui/editor-walk.png 1180 840 walk
           xvfb-run -a build/plugin/pcs-ui-snapshot ui/editor-mod.png 1180 840 mod
+          xvfb-run -a build/plugin/pcs-ui-snapshot ui/editor-mpe.png 1180 840 mpe
 
       - name: Train on the synthetic set and render examples
         run: scripts/render_examples.sh build renders

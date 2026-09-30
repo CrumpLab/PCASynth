@@ -152,6 +152,18 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
     addFloat (l, id::atAmount, "Aftertouch Amount", { -4.0f, 4.0f }, 1.0f, "SD");
     addPercent (l, id::macro, "Macro", 0.0f);
     addFloat (l, id::voiceSpread, "Voice Spread", { 0.0f, 2.0f }, 0.0f, "SD");
+
+    // Stage 6: MPE.
+    addBool (l, id::mpeOn, "MPE", false);
+    addChoice (l, id::mpeZone, "MPE Zone", { "Lower (ch 1)", "Upper (ch 16)" }, 0);
+    addInt (l, id::mpeBendRange, "MPE Note Bend Range", 1, 96, 48);
+    addChoice (l, id::mpePressDest, "MPE Pressure To", targetNames (true), 1); // PC1
+    addFloat (l, id::mpePressAmount, "MPE Pressure Amount", { -4.0f, 4.0f }, 1.5f, "SD");
+    addFloat (l, id::mpePressCurve, "MPE Pressure Curve", { -1.0f, 1.0f }, 0.0f);
+    addTime (l, id::mpeSmoothing, "MPE Smoothing", skewed (0.001f, 0.2f, 0.03f), 0.02f);
+    addChoice (l, id::mpeSlideDest, "MPE Slide To", targetNames (true), 2); // PC2
+    addFloat (l, id::mpeSlideAmount, "MPE Slide Amount", { -4.0f, 4.0f }, 1.0f, "SD");
+    addChoice (l, id::mpeSlideMode, "MPE Slide Mode", { "Bipolar", "Unipolar" }, 0);
     return l;
 }
 
@@ -197,6 +209,16 @@ ParamReader::ParamReader (juce::AudioProcessorValueTreeState& s)
     atAmount = s.getRawParameterValue (id::atAmount);
     macro = s.getRawParameterValue (id::macro);
     voiceSpread = s.getRawParameterValue (id::voiceSpread);
+    mpeOn = s.getRawParameterValue (id::mpeOn);
+    mpeZone = s.getRawParameterValue (id::mpeZone);
+    mpeBendRange = s.getRawParameterValue (id::mpeBendRange);
+    mpePressDest = s.getRawParameterValue (id::mpePressDest);
+    mpePressAmount = s.getRawParameterValue (id::mpePressAmount);
+    mpePressCurve = s.getRawParameterValue (id::mpePressCurve);
+    mpeSmoothing = s.getRawParameterValue (id::mpeSmoothing);
+    mpeSlideDest = s.getRawParameterValue (id::mpeSlideDest);
+    mpeSlideAmount = s.getRawParameterValue (id::mpeSlideAmount);
+    mpeSlideMode = s.getRawParameterValue (id::mpeSlideMode);
     for (int n = 0; n < 2; ++n)
         lfos[static_cast<size_t> (n)] = { s.getRawParameterValue (id::lfo (n, "on")), s.getRawParameterValue (id::lfo (n, "shape")),
                                           s.getRawParameterValue (id::lfo (n, "rate")), s.getRawParameterValue (id::lfo (n, "sync")),
@@ -261,6 +283,15 @@ pcs::SynthParams ParamReader::read (const std::array<float, pcs::kMaxComponents>
     p.mod.pressure = { index (atDest) - 1, get (atAmount) };
     p.mod.macro = get (macro);
     p.mod.voiceSpread = get (voiceSpread);
+
+    p.mpe.enabled = get (mpeOn) > 0.5f;
+    p.mpe.upperZone = index (mpeZone) == 1;
+    p.mpe.noteBendRange = get (mpeBendRange);
+    p.mpe.pressure = { index (mpePressDest) - 1, get (mpePressAmount) };
+    p.mpe.pressureCurve = get (mpePressCurve);
+    p.mpe.smoothing = get (mpeSmoothing);
+    p.mpe.slide = { index (mpeSlideDest) - 1, get (mpeSlideAmount) };
+    p.mpe.slideBipolar = index (mpeSlideMode) == 0;
     return p;
 }
 

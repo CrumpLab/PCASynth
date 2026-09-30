@@ -63,8 +63,9 @@ private:
     TrainPanel trainPanel;
     WalkPanel walkPanel;
     ModPanel modPanel;
-    std::array<juce::TextButton, 3> tabs { juce::TextButton ("Components"), juce::TextButton ("Random Walk"),
-                                           juce::TextButton ("LFOs & Expression") };
+    MpePanel mpePanel;
+    std::array<juce::TextButton, 4> tabs { juce::TextButton ("Components"), juce::TextButton ("Random Walk"),
+                                           juce::TextButton ("LFOs & Expression"), juce::TextButton ("MPE") };
     void showTab (int index);
     std::unique_ptr<juce::FileChooser> chooser;
     juce::int64 messageUntil = 0;

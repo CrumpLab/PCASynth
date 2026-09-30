@@ -13,17 +13,16 @@ bank of sine oscillators, so any pitch plays the learned timbre. See
 
 By [Matthew Crump](https://crumplab.com), Brooklyn College of CUNY.
 
-**Status: Stage 5 (version 0.5.0).** A playable VST3 (plus a Standalone
+**Status: Stage 6 (version 0.6.0).** A playable VST3 (plus a Standalone
 app) with its own UI:
-- a map of the sound space,
-- a four-corner morph pad,
-- a live view of the harmonics,
-- component sliders,
-- training on your own audio,
-- movement: random walks through the space, LFOs, and velocity, mod wheel
-  and aftertouch mapped to directions in it.
+- a map of the sound space, a four-corner morph pad, a live view of the
+  harmonics, component sliders;
+- training on your own audio;
+- random walks, LFOs and expression routing;
+- MPE: per-note bend, pressure and slide for controllers such as the
+  Expressive E Osmose.
 
-It has not yet been played in a DAW.
+It has not yet been played in a DAW or on an Osmose.
 
 ![The plugin window](docs/screenshot.png)
 
@@ -102,6 +101,25 @@ The **LFOs & Expression** tab has:
 - **Spread:** each note of a chord starts at a slightly different point.
 
 ![Random walk](docs/screenshot-walk.png)
+
+## MPE (Osmose and other MPE controllers)
+
+Open the **MPE** tab and switch **On**. If your controller sends its MPE
+configuration, this happens by itself. Then:
+- Each note bends on its own. Set **Note Bend** to match the controller: the
+  Osmose defaults to 48 semitones.
+- **Pressure** moves each note through the space on its own: by default
+  along PC1, or toward a chosen sound (set the sound on the LFOs &
+  Expression tab). **Curve** shapes the response (above 0 = more from a
+  light touch) and **Smoothing** steadies it.
+- **Slide** (CC74) is a second per-note direction (default PC2).
+- The **Notes** monitor shows what each note receives (channel, bend,
+  pressure, slide). Check it if something feels off.
+- The sound map shows each note's own point as you play.
+
+With MPE off, the plugin behaves as an ordinary synth.
+
+![MPE](docs/screenshot-mpe.png)
 
 ## Training your own space
 

@@ -77,6 +77,9 @@ void Synth::reset() noexcept
     for (size_t i = 0; i < lfos.size(); ++i)
         lfos[i].reset (walkSeed + 101u * static_cast<uint32_t> (i + 1));
     modWheel = pressure = 0.0f;
+    chBend.fill (0.0f);
+    chPressure.fill (0.0f);
+    chSlide.fill (64.0f / 127.0f);
     ++stamp;
 }
 
@@ -118,25 +121,69 @@ void Synth::process (float* const* out, int numChannels, int numSamples, const M
         handle (events[e++]);
 }
 
+bool Synth::isMemberChannel (int channel) const noexcept
+{
+    if (! params.mpe.enabled || channel < 1 || channel > 16)
+        return false;
+    return channel != (params.mpe.upperZone ? 16 : 1);
+}
+
 void Synth::handle (const MidiEvent& e) noexcept
 {
+    const bool member = isMemberChannel (e.channel);
+    const auto ch = static_cast<size_t> (std::clamp (e.channel, 0, 16));
     switch (e.type)
     {
         case MidiEvent::Type::NoteOn:
             if (e.value > 0.0f)
-                noteOn (e.note, e.value);
+                noteOn (e.note, e.value, e.channel);
             else
-                noteOff (e.note);
+                noteOff (e.note, e.channel);
             break;
-        case MidiEvent::Type::NoteOff: noteOff (e.note); break;
+        case MidiEvent::Type::NoteOff: noteOff (e.note, e.channel); break;
         case MidiEvent::Type::PitchBend:
+            if (member)
+            {
+                chBend[ch] = std::clamp (e.value, -1.0f, 1.0f);
+                for (auto& v : voices)
+                    if (v.active && v.follows && v.channel == e.channel)
+                    {
+                        v.noteBend = chBend[ch];
+                        setVoiceFrequency (v);
+                    }
+                break;
+            }
             bend = std::clamp (e.value, -1.0f, 1.0f);
             for (auto& v : voices)
                 if (v.active)
                     setVoiceFrequency (v);
             break;
         case MidiEvent::Type::ModWheel: modWheel = std::clamp (e.value, 0.0f, 1.0f); break;
-        case MidiEvent::Type::Pressure: pressure = std::clamp (e.value, 0.0f, 1.0f); break;
+        case MidiEvent::Type::Pressure:
+            if (member)
+            {
+                chPressure[ch] = std::clamp (e.value, 0.0f, 1.0f);
+                for (auto& v : voices)
+                    if (v.active && v.follows && v.channel == e.channel)
+                        v.pressure = chPressure[ch];
+                break;
+            }
+            pressure = std::clamp (e.value, 0.0f, 1.0f);
+            break;
+        case MidiEvent::Type::PolyPressure: // per-note pressure (MPE mode; the plugin sends it only then)
+            for (auto& v : voices)
+                if (v.active && ! v.releasing && v.note == e.note && (e.channel == 0 || v.channel == e.channel))
+                    v.pressure = std::clamp (e.value, 0.0f, 1.0f);
+            break;
+        case MidiEvent::Type::Slide:
+            if (member)
+            {
+                chSlide[ch] = std::clamp (e.value, 0.0f, 1.0f);
+                for (auto& v : voices)
+                    if (v.active && v.follows && v.channel == e.channel)
+                        v.slide = chSlide[ch];
+            }
+            break;
         case MidiEvent::Type::Sustain:
             sustainDown = e.value >= 0.5f;
             if (! sustainDown)
@@ -160,7 +207,7 @@ void Synth::handle (const MidiEvent& e) noexcept
     }
 }
 
-void Synth::noteOn (int note, float velocity) noexcept
+void Synth::noteOn (int note, float velocity, int channel) noexcept
 {
     if (model() == nullptr)
         return;
@@ -194,6 +241,14 @@ void Synth::noteOn (int note, float velocity) noexcept
     v->releasing = false;
     v->sustained = false;
     v->velocity = std::clamp (velocity, 0.0f, 1.0f);
+    // MPE: a note on a member channel starts from (and follows) that channel's state.
+    v->channel = channel;
+    v->follows = isMemberChannel (channel);
+    const auto ch = static_cast<size_t> (std::clamp (channel, 0, 16));
+    v->noteBend = v->follows ? chBend[ch] : 0.0f;
+    v->pressure = v->follows ? chPressure[ch] : 0.0f;
+    v->pressureSmooth = std::pow (v->pressure, std::pow (3.0f, -std::clamp (params.mpe.pressureCurve, -1.0f, 1.0f)));
+    v->slide = v->slideSmooth = v->follows ? chSlide[ch] : 64.0f / 127.0f;
     v->walk.reset (params.mod.walk.seed * 7919u + static_cast<uint32_t> (noteCounter + 1));
     v->spread = {};
     if (params.mod.voiceSpread > 0.0f)
@@ -222,11 +277,13 @@ void Synth::noteOn (int note, float velocity) noexcept
     setVoiceFrequency (*v);
 }
 
-void Synth::noteOff (int note) noexcept
+void Synth::noteOff (int note, int channel) noexcept
 {
     for (auto& v : voices)
-        if (v.active && ! v.releasing && ! v.sustained && v.note == note)
+        if (v.active && ! v.releasing && ! v.sustained && v.note == note
+            && (! params.mpe.enabled || channel == 0 || v.channel == channel))
         {
+            v.follows = false; // keeps its last bend, pressure and slide from here on
             if (sustainDown)
             {
                 v.sustained = true;
@@ -239,7 +296,7 @@ void Synth::noteOff (int note) noexcept
 
 void Synth::setVoiceFrequency (Voice& v) noexcept
 {
-    v.freq = midiToHz (v.note + bend * params.pitchBendRange);
+    v.freq = midiToHz (v.note + bend * params.pitchBendRange + v.noteBend * params.mpe.noteBendRange);
     const int modelH = model() != nullptr ? model()->numHarmonics : 0;
     const int limit = std::min (modelH, std::max (1, params.maxHarmonics));
     int n = 0;
@@ -297,6 +354,27 @@ void Synth::frameAt (const Voice& v, double pos, float* dst) noexcept
         const float b = std::max (0.0f, std::pow (10.0f, scratchC[static_cast<size_t> (i)] / 20.0f) - floorLin);
         dst[i] = a + frac * (b - a);
     }
+}
+
+bool Synth::newestVoicePoint (Point& out) const noexcept
+{
+    const Voice* best = nullptr;
+    for (const auto& v : voices)
+        if (v.active && (best == nullptr || (v.releasing == best->releasing ? v.age > best->age : ! v.releasing)))
+            best = &v;
+    if (best == nullptr)
+        return false;
+    out = best->ownPoint ? best->point : heard;
+    return true;
+}
+
+int Synth::voiceInfo (VoiceInfo* out, int max) const noexcept
+{
+    int n = 0;
+    for (const auto& v : voices)
+        if (v.active && n < max)
+            out[n++] = { v.note, v.channel, v.noteBend * params.mpe.noteBendRange, v.pressureSmooth, v.slideSmooth, v.releasing };
+    return n;
 }
 
 int Synth::voicePoints (Point* points, int max) const noexcept
@@ -358,8 +436,12 @@ void Synth::modulate (int n) noexcept
         ++stamp;
     }
 
-    // Per-voice points: own walks, velocity and spread.
-    const bool perVoice = own > 0.0f || mp.velocity.destination >= 0 || mp.voiceSpread > 0.0f;
+    // Per-voice points: own walks, velocity, spread and MPE pressure and slide.
+    const auto& mpe = params.mpe;
+    const bool mpeMoves = mpe.enabled && (mpe.pressure.destination >= 0 || mpe.slide.destination >= 0);
+    const bool perVoice = own > 0.0f || mp.velocity.destination >= 0 || mp.voiceSpread > 0.0f || mpeMoves;
+    const float smooth = 1.0f - std::exp (-static_cast<float> (dt) / std::max (0.001f, mpe.smoothing));
+    const float gamma = std::pow (3.0f, -std::clamp (mpe.pressureCurve, -1.0f, 1.0f));
     for (auto& v : voices)
     {
         if (! v.active)
@@ -374,6 +456,14 @@ void Synth::modulate (int n) noexcept
         for (size_t j = 0; j < pt.size(); ++j)
             pt[j] += own * v.walk.offset()[j] + v.spread[j];
         addToDestination (pt, mp.velocity.destination, mp.velocity.amount * v.velocity, mp, zSmooth);
+        v.pressureSmooth += (std::pow (v.pressure, gamma) - v.pressureSmooth) * smooth;
+        v.slideSmooth += (v.slide - v.slideSmooth) * smooth;
+        if (mpe.enabled)
+        {
+            addToDestination (pt, mpe.pressure.destination, mpe.pressure.amount * v.pressureSmooth, mp, zSmooth);
+            const float slide = mpe.slideBipolar ? (v.slideSmooth - 64.0f / 127.0f) / (63.0f / 127.0f) : v.slideSmooth;
+            addToDestination (pt, mpe.slide.destination, mpe.slide.amount * std::clamp (slide, -1.0f, 1.0f), mp, zSmooth);
+        }
         for (auto& x : pt)
             x = std::clamp (x, -8.0f, 8.0f);
     }

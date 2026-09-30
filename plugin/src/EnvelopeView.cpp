@@ -22,7 +22,12 @@ void EnvelopeView::refresh()
     for (int j = 0; j < pcs::kMaxComponents; ++j)
         z[static_cast<size_t> (j)] = j < used ? z[static_cast<size_t> (j)] * ex : 0.0f;
     if (processor.isAudioRunning())
+    {
         z = processor.getHeardPoint();
+        PCASynthProcessor::Point newest;
+        if (processor.getNewestVoicePoint (newest)) // the most recent note (its own MPE/walk point)
+            z = newest;
+    }
     if (dirty || z != shown)
     {
         shown = z;

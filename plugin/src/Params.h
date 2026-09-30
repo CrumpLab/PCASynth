@@ -26,7 +26,12 @@ inline const juce::String components = "components", exaggerate = "exaggerate", 
                           walkPerVoice = "walk_per_voice", walkSeed = "walk_seed", walkRestart = "walk_restart",
                           walkFreeze = "walk_freeze", velDest = "vel_dest", velAmount = "vel_amount", mwDest = "mw_dest",
                           mwAmount = "mw_amount", atDest = "at_dest", atAmount = "at_amount", macro = "macro",
-                          voiceSpread = "voice_spread";
+                          voiceSpread = "voice_spread",
+                          // Stage 6: MPE
+                          mpeOn = "mpe_on", mpeZone = "mpe_zone", mpeBendRange = "mpe_bend_range",
+                          mpePressDest = "mpe_press_dest", mpePressAmount = "mpe_press_amount",
+                          mpePressCurve = "mpe_press_curve", mpeSmoothing = "mpe_smoothing",
+                          mpeSlideDest = "mpe_slide_dest", mpeSlideAmount = "mpe_slide_amount", mpeSlideMode = "mpe_slide_mode";
 inline juce::String lfo (int n, const char* what) { return "lfo" + juce::String (n + 1) + "_" + what; }
 }
 
@@ -60,6 +65,8 @@ private:
     std::atomic<float>*walkOn, *walkMode, *walkAmount, *walkRate, *walkSync, *walkSyncLen, *walkGlide, *walkTether, *walkDims,
         *walkFocus, *walkPerVoice, *walkSeed, *walkRestart, *walkFreeze, *velDest, *velAmount, *mwDest, *mwAmount, *atDest,
         *atAmount, *macro, *voiceSpread;
+    std::atomic<float>*mpeOn, *mpeZone, *mpeBendRange, *mpePressDest, *mpePressAmount, *mpePressCurve, *mpeSmoothing,
+        *mpeSlideDest, *mpeSlideAmount, *mpeSlideMode;
     struct LfoRefs
     {
         std::atomic<float>*on, *shape, *rate, *sync, *syncLen, *depth, *target;

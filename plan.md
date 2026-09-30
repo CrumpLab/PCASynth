@@ -6,10 +6,10 @@ of WAVs of different instruments all playing the same note. It learns the
 space those sounds span, and you play any point in that space: the training
 sounds themselves, morphs between them, or places no instrument has been.
 
-> **Status:** Stages 1–5 are built: the engine, the offline tools, and a
-> playable VST3 with its own UI, which trains new spaces from your audio
-> and moves through them (random walks, LFOs, expression). Stage 6 (MPE
-> for the Osmose) is planned. Decisions are recorded in §6. Licence: open source (AGPLv3, following JUCE's open-source
+> **Status:** Stages 1–6 are built: the engine, the offline tools, and a
+> playable VST3 with its own UI. It trains new spaces from your audio,
+> moves through them (random walks, LFOs, expression), and takes MPE
+> (per-note bend, pressure and slide, aimed at the Osmose). Decisions are recorded in §6. Licence: open source (AGPLv3, following JUCE's open-source
 > licence).
 
 ---
@@ -294,7 +294,7 @@ Each stage ends with something to **hear**.
   - The training list, settings and model survive a state round trip.
   - The background thread finishes.
 
-### Stage 5: Movement and expression — done, awaiting a play in a DAW
+### Stage 5: Movement and expression — done
 All modulation runs in the engine (`Modulation.h`), so offline renders use it
 too. It is added after the point's smoothing:
 - the **heard point** = home (the sliders) + shared walk + LFOs + mod wheel
@@ -362,47 +362,66 @@ restarts it.
 **Listening examples:** 09–14 (drift, jumps, tour, neighbour tour, per-voice
 walk, LFOs). `pcs-render` gained `--walk` and related options.
 
-### Stage 6: MPE (for the Osmose)
+### Stage 6: MPE (for the Osmose) — done, awaiting a play on the Osmose
 Per-note expression from MPE controllers, aimed at the Expressive E Osmose.
-Each voice can already have its own point in the space (Stage 5), so MPE
-dimensions become per-note moves through the space.
+Each voice already had its own point in the space (Stage 5), so pressure and
+slide became per-note moves through the space.
 
-**Why it's needed:** today, pitch bend is one bend for the whole
-instrument, pressure is one global value, and slide (CC74) is ignored. In
-MPE each note sends these on its own channel, so bending or pressing one
-key would move every sounding note.
+**Built:**
+- **Engine** (`MpeParams`, events carry their channel):
+  - With MPE on, each member channel keeps its latest bend, pressure and
+    slide, so values sent just before a note-on apply to that note.
+  - A note follows its channel until key-up, then keeps its last values. A
+    released note is never bent or pressed by the next note on the same
+    channel.
+  - The master channel's bend and pressure stay global (bend uses the
+    ordinary Pitch Bend Range). Lower zone (master 1, notes 2–16) or upper
+    zone (master 16, notes 1–15).
+- **Pitch:**
 
-**Plan:**
-- **MPE input:**
-  - Notes tracked by channel, using JUCE's MPE support (`MPEInstrument`,
-    zone layout: lower zone, 15 member channels by default).
-  - The plugin declares itself MPE-capable to the host.
-  - Settings: MPE on or off, zone, and master and per-note bend ranges.
-    The per-note range defaults to 48 semitones, the Osmose default; set it
-    to match the Osmose's setting.
-- **Per-note pitch bend:** each voice bends on its own. Master-channel bend
-  still bends everything.
-- **Per-note pressure** (channel pressure on each note's channel, or poly
-  aftertouch) routed to a destination for that note only: PC1–PC16 or
-  Toward Sound, with an amount and a **pressure curve** (response shaping
-  for the Osmose's press depth) plus light smoothing.
-- **Per-note slide** (CC74) as a second routable per-note direction, with
-  its own amount. It is bipolar around its centre or unipolar from 0, as a
-  setting.
-- **Strike velocity** uses the existing velocity routing. Release velocity
-  could set per-note release time (optional).
-- **Non-MPE controllers** keep working as now: with MPE off, pressure and
-  CC74 stay global.
-- **Display:** the sound map shows each note's point moving as you press
-  and slide; the envelope view follows the most recent note.
-- **Tests:** simulated MPE streams.
-  - Two notes on separate channels bend and press independently.
-  - Pressure moves only its own note's point.
-  - Master bend moves both.
-  - Non-MPE input is unchanged.
-  - Voice stealing and channel reuse.
-- **Not testable here:** the feel on a real Osmose (pressure curve, ranges).
-  It needs a play-through, and the defaults will be tuned from that.
+  `note + master bend × Pitch Bend Range + note bend × Note Bend Range`
+
+  The Note Bend Range defaults to 48 semitones.
+- **Pressure** (channel pressure on a member channel, or poly aftertouch):
+  - Routed per note to PC1–PC16 or Toward Sound. The default is PC1,
+    +1.5 SD at full pressure.
+  - Curve −1..1: the pressure is raised to the power 3^−curve, so above 0
+    responds more to a light touch.
+  - Smoothing: 20 ms by default.
+- **Slide (CC74):** routed per note (default PC2, ±1 SD), either bipolar
+  around 64 or unipolar from 0.
+- **With MPE off**, everything behaves as in Stage 5:
+  - Channel bends are global.
+  - Channel and poly pressure feed the global aftertouch routing.
+  - CC74 is ignored.
+- **Plugin:**
+  - Declares MPE support to the host (`supportsMPE`).
+  - Reads the controller's **MPE Configuration Message** (RPN 6 on channel 1
+    or 16), which turns MPE on and sets the zone, and **RPN 0** on a member
+    channel, which sets the Note Bend Range. So a controller that sends its
+    setup configures the plugin.
+- **UI:** an **MPE** tab with the zone, Note Bend Range, the Pressure and
+  Slide routing, and a **note monitor**: each sounding note's channel, bend
+  (semitones), pressure and slide, live. The sound map shows each note's
+  point as it moves; the envelope view follows the most recent note.
+- **Engine tests:**
+  - Member-channel bends are independent, checked by the rendered pitch.
+  - The master bend moves every note.
+  - Pressure, slide and poly pressure move only their own note.
+  - Pressure curve and smoothing.
+  - A released note keeps its expression when the channel is reused.
+  - Upper zone.
+  - MPE off leaves channels alone.
+- **Plugin tests:**
+  - Declares MPE support.
+  - The MPE Configuration Message and RPN 0 set the parameters.
+  - Per-note bend and pressure go through the processor.
+  - Default routing moves notes 1.5 SD on PC1 and 1 SD on PC2.
+  - MPE off behaves as before.
+
+**Still to check on a real Osmose:** the feel (pressure curve, smoothing,
+amounts); whether it sends the MPE Configuration Message (if not, switch MPE
+on by hand); and its pitch-bend range setting (match Note Bend).
 
 ### Stage 7: Richer model
 - **Residual noise:** band energies of what the harmonics don't explain, as

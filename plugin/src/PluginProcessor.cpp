@@ -306,7 +306,60 @@ void PCASynthProcessor::exportWav (const juce::File& file, int note, double seco
     });
 }
 
-void PCASynthProcessor::timerCallback() { collectGarbage(); }
+void PCASynthProcessor::timerCallback()
+{
+    collectGarbage();
+    applyControllerSetup();
+}
+
+void PCASynthProcessor::applyControllerSetup()
+{
+    if (const int zone = pendingZone.exchange (-1); zone >= 0)
+    {
+        setParamValue (pcsplugin::id::mpeOn, 1.0f);
+        setParamValue (pcsplugin::id::mpeZone, static_cast<float> (zone));
+    }
+    if (const int range = pendingBendRange.exchange (-1); range > 0)
+        setParamValue (pcsplugin::id::mpeBendRange, static_cast<float> (range));
+}
+
+void PCASynthProcessor::parseRpn (const juce::MidiMessage& m) noexcept
+{
+    if (! m.isController())
+        return;
+    const int ch = m.getChannel();
+    auto& r = rpn[static_cast<size_t> (ch)];
+    switch (m.getControllerNumber())
+    {
+        case 101: r.msb = m.getControllerValue(); break;
+        case 100: r.lsb = m.getControllerValue(); break;
+        case 6:
+            r.dataMsb = m.getControllerValue();
+            if (r.msb == 0 && r.lsb == 6 && (ch == 1 || ch == 16) && r.dataMsb > 0)
+                pendingZone = ch == 1 ? 0 : 1; // MPE Configuration Message
+            else if (r.msb == 0 && r.lsb == 0 && ch != 1 && ch != 16 && r.dataMsb > 0)
+                pendingBendRange = r.dataMsb;  // per-note pitch bend sensitivity
+            break;
+        default: break;
+    }
+}
+
+int PCASynthProcessor::getVoiceInfo (pcs::Synth::VoiceInfo* out, int max) const
+{
+    const juce::SpinLock::ScopedLockType sl (voiceInfoLock);
+    const int n = std::min (max, numVoiceInfos);
+    std::copy (voiceInfos.begin(), voiceInfos.begin() + n, out);
+    return n;
+}
+
+bool PCASynthProcessor::getNewestVoicePoint (Point& out) const noexcept
+{
+    if (! hasNewest.load())
+        return false;
+    for (size_t j = 0; j < out.size(); ++j)
+        out[j] = newestPoint[j].load (std::memory_order_relaxed);
+    return true;
+}
 
 bool PCASynthProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
@@ -347,11 +400,13 @@ void PCASynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         }
 
     events.clear();
+    const bool mpe = parameters.getRawParameterValue (pcsplugin::id::mpeOn)->load() > 0.5f;
     for (const auto meta : midi)
     {
         if (events.size() == events.capacity())
             break;
         const auto m = meta.getMessage();
+        parseRpn (m);
         pcs::MidiEvent e;
         e.offset = meta.samplePosition;
         if (m.isNoteOn())
@@ -368,12 +423,16 @@ void PCASynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
             e = { e.offset, pcs::MidiEvent::Type::ModWheel, 0, m.getControllerValue() / 127.0f };
         else if (m.isChannelPressure())
             e = { e.offset, pcs::MidiEvent::Type::Pressure, 0, m.getChannelPressureValue() / 127.0f };
-        else if (m.isAftertouch())
-            e = { e.offset, pcs::MidiEvent::Type::Pressure, 0, m.getAfterTouchValue() / 127.0f };
+        else if (m.isAftertouch()) // per note with MPE, else the global pressure
+            e = { e.offset, mpe ? pcs::MidiEvent::Type::PolyPressure : pcs::MidiEvent::Type::Pressure, m.getNoteNumber(),
+                  m.getAfterTouchValue() / 127.0f };
+        else if (mpe && m.isControllerOfType (74))
+            e = { e.offset, pcs::MidiEvent::Type::Slide, 0, m.getControllerValue() / 127.0f };
         else if (m.isAllNotesOff() || m.isAllSoundOff())
             e = { e.offset, pcs::MidiEvent::Type::AllNotesOff, 0, 0.0f };
         else
             continue;
+        e.channel = m.getChannel();
         events.push_back (e);
     }
 
@@ -395,6 +454,17 @@ void PCASynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         for (size_t j = 0; j < pts[i].size(); ++j)
             voicePoint[static_cast<size_t> (i)][j].store (pts[i][j], std::memory_order_relaxed);
     numVoicePoints.store (nv, std::memory_order_relaxed);
+    pcs::Point newest;
+    const bool have = synth.newestVoicePoint (newest);
+    if (have)
+        for (size_t j = 0; j < newest.size(); ++j)
+            newestPoint[j].store (newest[j], std::memory_order_relaxed);
+    hasNewest.store (have, std::memory_order_relaxed);
+    {
+        const juce::SpinLock::ScopedTryLockType sl (voiceInfoLock);
+        if (sl.isLocked())
+            numVoiceInfos = synth.voiceInfo (voiceInfos.data(), kMaxShownVoices);
+    }
     lastBlockMs.store (juce::Time::getMillisecondCounter(), std::memory_order_relaxed);
     hasProcessed.store (true, std::memory_order_relaxed);
 }

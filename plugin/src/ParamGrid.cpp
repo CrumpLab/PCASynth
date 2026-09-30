@@ -69,7 +69,10 @@ juce::ToggleButton& ParamGrid::toggle (const juce::String& paramId, const juce::
     return ref;
 }
 
-void ParamGrid::custom (juce::Component& c, const juce::String& label, int widthCells) { add (c, label, widthCells); }
+void ParamGrid::custom (juce::Component& c, const juce::String& label, int widthCells, bool fillCell)
+{
+    add (c, label, widthCells).fill = fillCell;
+}
 
 float ParamGrid::value (const juce::String& paramId) const
 {
@@ -113,6 +116,12 @@ void ParamGrid::resized()
             for (auto& it : g.items)
             {
                 auto cell = inner.removeFromLeft (juce::roundToInt (cellW * it.cells));
+                if (it.fill)
+                {
+                    it.label->setBounds ({});
+                    it.component->setBounds (cell);
+                    continue;
+                }
                 it.label->setBounds (cell.removeFromTop (15));
                 auto* sl = dynamic_cast<juce::Slider*> (it.component);
                 if (sl != nullptr && sl->getSliderStyle() == juce::Slider::LinearBar)
@@ -242,3 +251,89 @@ void ModPanel::refresh()
         lfoCycle[static_cast<size_t> (n)]->setEnabled (sync);
     }
 }
+
+// ---- MPE ----------------------------------------------------------------------------------
+
+void NoteMonitor::refresh()
+{
+    std::array<pcs::Synth::VoiceInfo, PCASynthProcessor::kMaxShownVoices> now {};
+    const int n = processor.isAudioRunning() ? processor.getVoiceInfo (now.data(), static_cast<int> (now.size())) : 0;
+    bool same = n == count;
+    for (int i = 0; same && i < n; ++i)
+    {
+        const auto& a = now[static_cast<size_t> (i)];
+        const auto& b = info[static_cast<size_t> (i)];
+        auto near = [] (float x, float y) { return std::abs (x - y) < 1e-4f; };
+        same = a.note == b.note && a.channel == b.channel && near (a.bendSemitones, b.bendSemitones) && near (a.pressure, b.pressure)
+            && near (a.slide, b.slide) && a.releasing == b.releasing;
+    }
+    if (! same)
+    {
+        info = now;
+        count = n;
+        repaint();
+    }
+}
+
+void NoteMonitor::paint (juce::Graphics& g)
+{
+    auto r = getLocalBounds();
+    g.setColour (theme::background);
+    g.fillRoundedRectangle (r.toFloat(), 4.0f);
+    r = r.reduced (6, 4);
+    g.setFont (theme::font (11.0f));
+    if (count == 0)
+    {
+        g.setColour (theme::faint);
+        g.drawText ("Play to see each note's channel, bend, pressure and slide", r, juce::Justification::centred);
+        return;
+    }
+    const int rows = juce::jmin (count, juce::jmax (1, r.getHeight() / 13));
+    for (int i = 0; i < rows; ++i)
+    {
+        const auto& v = info[static_cast<size_t> (i)];
+        auto row = r.removeFromTop (13);
+        g.setColour (v.releasing ? theme::faint : theme::text);
+        const auto name = juce::MidiMessage::getMidiNoteName (v.note, true, true, 4);
+        g.drawText (name + "  ch " + juce::String (v.channel), row.removeFromLeft (70), juce::Justification::centredLeft);
+        g.drawText ((v.bendSemitones >= 0 ? "+" : "") + juce::String (v.bendSemitones, 2) + " st", row.removeFromLeft (62),
+                    juce::Justification::centredLeft);
+        auto bar = [&g, &row] (float value, const juce::String& label) {
+            auto cell = row.removeFromLeft (row.getWidth() / 2).reduced (4, 3);
+            g.setColour (theme::faint);
+            g.drawText (label, cell.removeFromLeft (14), juce::Justification::centredLeft);
+            g.setColour (theme::grid.brighter (0.2f));
+            g.fillRect (cell);
+            g.setColour (theme::accent);
+            g.fillRect (cell.withWidth (juce::roundToInt (cell.getWidth() * juce::jlimit (0.0f, 1.0f, value))));
+        };
+        bar (v.pressure, "P");
+        bar (v.slide, "S");
+    }
+}
+
+MpePanel::MpePanel (PCASynthProcessor& p) : ParamGrid (p), monitor (p)
+{
+    namespace id = pcsplugin::id;
+    group ("MPE", 0);
+    toggle (id::mpeOn, "On").setTooltip ("Per-note pitch bend, pressure and slide (CC74) from an MPE controller. "
+                                         "Turns on by itself when the controller sends its MPE configuration");
+    menu (id::mpeZone, "Zone", 2).setTooltip ("Lower: master channel 1, notes on 2-16 (the usual setting). Upper: master 16, notes on 1-15");
+    knob (id::mpeBendRange, "Note Bend").setTooltip ("Semitones for a full per-note bend. Match the controller's setting (Osmose default: 48)");
+
+    group ("Pressure", 0);
+    menu (id::mpePressDest, "To", 2);
+    knob (id::mpePressAmount, "Amount").setTooltip ("How far full pressure moves the note (SD, or fraction of the way to the sound)");
+    knob (id::mpePressCurve, "Curve").setTooltip ("Above 0: more response to a light touch. Below 0: needs a firmer press");
+    knob (id::mpeSmoothing, "Smoothing");
+
+    group ("Slide (CC74)", 0);
+    menu (id::mpeSlideDest, "To", 2);
+    knob (id::mpeSlideAmount, "Amount");
+    menu (id::mpeSlideMode, "Mode", 2);
+
+    group ("Notes", 0);
+    custom (monitor, "", 5, true);
+}
+
+void MpePanel::refresh() { monitor.refresh(); }

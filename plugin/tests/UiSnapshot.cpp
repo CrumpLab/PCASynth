@@ -4,6 +4,7 @@
 //   pcs-ui-snapshot out.png width height train   (the Train panel after training on generated notes)
 //   pcs-ui-snapshot out.png width height walk    (a neighbour tour under a chord, Random Walk tab)
 //   pcs-ui-snapshot out.png width height mod     (LFOs & Expression tab)
+//   pcs-ui-snapshot out.png width height mpe     (MPE tab, three notes with their own expression)
 #include "../src/PluginEditor.h"
 #include "../src/PluginProcessor.h"
 #include "TrainingSet.h"
@@ -85,6 +86,11 @@ int main (int argc, char** argv)
         set ("walk_per_voice", 0.3f);
         ed->selectTab (1);
     }
+    else if (mode == "mpe")
+    {
+        set ("mpe_on", 1.0f);
+        ed->selectTab (3);
+    }
     else if (mode == "mod")
     {
         set ("lfo1_on", 1.0f);
@@ -99,8 +105,22 @@ int main (int argc, char** argv)
     // Play a chord (for three seconds with a walk, so it leaves a trail).
     juce::AudioBuffer<float> block (2, 512);
     juce::MidiBuffer midi;
-    for (int n : { 48, 55, 64 })
-        midi.addEvent (juce::MidiMessage::noteOn (1, n, 0.8f), 0);
+    if (mode == "mpe")
+    {
+        // Three notes on member channels, each with its own bend, pressure and slide.
+        const int notes[] = { 48, 55, 64 };
+        for (int i = 0; i < 3; ++i)
+        {
+            const int ch = 2 + i;
+            midi.addEvent (juce::MidiMessage::pitchWheel (ch, 8192 + (i - 1) * 300), 0);
+            midi.addEvent (juce::MidiMessage::noteOn (ch, notes[i], 0.8f), 0);
+            midi.addEvent (juce::MidiMessage::channelPressureChange (ch, 30 + 40 * i), 0);
+            midi.addEvent (juce::MidiMessage::controllerEvent (ch, 74, 40 + 30 * i), 0);
+        }
+    }
+    else
+        for (int n : { 48, 55, 64 })
+            midi.addEvent (juce::MidiMessage::noteOn (1, n, 0.8f), 0);
     const int blocks = mode == "walk" ? 280 : 90;
     for (int i = 0; i < blocks; ++i)
     {
