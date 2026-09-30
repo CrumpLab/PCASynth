@@ -5,9 +5,11 @@ const juce::Identifier Trainer::treeType ("Training");
 namespace {
 std::string settingsKey (const pcs::AnalysisSettings& s)
 {
-    return juce::String::formatted ("%d|%d|%.3f|%.3f|%.3f|%d|%.3f|%.3f|%d|%.3f|%d", s.midiNote, s.autoPitch ? 1 : 0,
+    // Only what changes the analysis (representation and pitch tracking are applied at training).
+    return juce::String::formatted ("%d|%d|%.3f|%.3f|%.3f|%d|%.3f|%.3f|%d|%.3f|%d|%d|%d", s.midiNote, s.autoPitch ? 1 : 0,
                                     s.tuneSearchCents, s.duration, s.frameRate, s.harmonics, s.floorDb, s.periodsPerWindow,
-                                    s.trimOnset ? 1 : 0, s.onsetThresholdDb, s.normalizeLoudness ? 1 : 0)
+                                    s.trimOnset ? 1 : 0, s.onsetThresholdDb, s.normalizeLoudness ? 1 : 0, s.noiseBands,
+                                    s.trackPartials ? 1 : 0)
         .toStdString();
 }
 } // namespace
@@ -280,6 +282,10 @@ juce::ValueTree Trainer::toValueTree() const
     t.setProperty ("normalize", s.analysis.normalizeLoudness, nullptr);
     t.setProperty ("trim", s.analysis.trimOnset, nullptr);
     t.setProperty ("components", s.components, nullptr);
+    t.setProperty ("noiseBands", s.analysis.noiseBands, nullptr);
+    t.setProperty ("partials", s.analysis.trackPartials, nullptr);
+    t.setProperty ("representation", static_cast<int> (s.analysis.representation), nullptr);
+    t.setProperty ("pitchTracking", static_cast<int> (s.analysis.pitchTracking), nullptr);
     for (const auto& e : getEntries())
     {
         juce::ValueTree f ("File");
@@ -304,6 +310,10 @@ void Trainer::fromValueTree (const juce::ValueTree& t)
     s.analysis.normalizeLoudness = t.getProperty ("normalize", true);
     s.analysis.trimOnset = t.getProperty ("trim", true);
     s.components = t.getProperty ("components", pcs::kMaxComponents);
+    s.analysis.noiseBands = t.getProperty ("noiseBands", 16);
+    s.analysis.trackPartials = t.getProperty ("partials", true);
+    s.analysis.representation = static_cast<pcs::Representation> (juce::jlimit (0, 2, static_cast<int> (t.getProperty ("representation", 0))));
+    s.analysis.pitchTracking = static_cast<pcs::PitchTracking> (juce::jlimit (0, 2, static_cast<int> (t.getProperty ("pitchTracking", 1))));
     setSettings (s);
     const juce::ScopedLock sl (lock);
     entries.clear();

@@ -232,3 +232,187 @@ TEST_CASE ("Models swap in without the audio thread freeing them", "[synth]")
     s.process (ch, 1, 256, &on, 1);
     CHECK (buf[100] == 0.0f);
 }
+
+TEST_CASE ("Residual noise renders at the level the model holds", "[synth][stage7]")
+{
+    // A sound whose harmonics are silent and whose noise is -40 dB RMS in every band.
+    AnalysisSettings s;
+    s.duration = 1.0;
+    s.harmonics = 16;
+    s.noiseBands = 16;
+    s.normalizeLoudness = false;
+    s.trimOnset = false;
+    HarmonicSound noise;
+    noise.name = "noise";
+    noise.f0 = midiToHz (57);
+    noise.numFrames = 100;
+    noise.numHarmonics = 16;
+    noise.numNoiseBands = 16;
+    noise.db.assign (100 * 16, -120.0f);
+    noise.noiseDb.assign (100 * 16, -40.0f);
+    noise.partialCents.assign (16, 0.0f);
+    s.floorDb = -120.0;
+    auto m = std::make_shared<const Model> (pcs::singleSoundModel (noise, s));
+
+    SynthParams p;
+    p.mode = PlayMode::Loop;
+    p.gainDb = 0.0f;
+    p.attack = 0.001f;
+    const auto audio = renderNotes (m, p, { { 0.0, 1.5, 57, 1.0f } }, 1.5);
+    // Its own analysis at the same note: every band within 2.5 dB (tone-free, so
+    // the analysis needs a nominal pitch).
+    auto a = s;
+    a.midiNote = 57;
+    a.tuneSearchCents = 1.0;
+    a.trackPartials = false;
+    a.harmonics = 16;
+    const auto again = analyseHarmonics (audio, a, "again");
+    for (int b = 0; b < 16; ++b)
+    {
+        if (noiseBandEdge (b + 1, 16) * midiToHz (57) > 0.4 * 48000.0)
+            break;
+        double mean = 0.0;
+        for (int t = 20; t < 80; ++t)
+            mean += again.noiseAt (t, b) / 60.0;
+        INFO ("band " << b);
+        CHECK (mean == Approx (-40.0).margin (2.5));
+    }
+}
+
+TEST_CASE ("Stretched partials render at their frequencies; notes transpose them", "[synth][stage7]")
+{
+    // Analyse a piano-like stretched tone, play it back, track its partials again.
+    AnalysisSettings s;
+    s.duration = 1.2;
+    s.harmonics = 32;
+    s.midiNote = 48;
+    const double f0 = midiToHz (48), B = 0.0004;
+    AudioBuffer tone;
+    tone.sampleRate = 48000.0;
+    tone.resize (1, static_cast<int> (1.6 * 48000.0));
+    for (int h = 1; h <= 32; ++h)
+        for (size_t i = 0; i < tone.channels[0].size(); ++i)
+            tone.channels[0][i] += static_cast<float> (0.3 / h * std::sin (6.28318530717958647692 * h * f0 * std::sqrt (1.0 + B * h * h) * static_cast<double> (i) / 48000.0));
+    const auto sound = analyseHarmonics (tone, s, "stretched");
+    auto m = std::make_shared<const Model> (pcs::singleSoundModel (sound, s));
+
+    SynthParams p;
+    p.mode = PlayMode::Loop;
+    p.noiseDb = -60.0f;
+    for (int note : { 48, 55 })
+    {
+        const auto out = renderNotes (m, p, { { 0.0, 1.6, note, 1.0f } }, 1.6);
+        const auto mono = monoMix (out);
+        const auto f = trackPartials (mono, 48000.0, 9600, midiToHz (note), 24);
+        for (int h = 2; h <= 24; h += 2)
+        {
+            INFO ("note " << note << " partial " << h);
+            const double cents = 1200.0 * std::log2 (f[static_cast<size_t> (h - 1)] / (h * f[0]));
+            CHECK (cents == Approx (sound.partialCents[static_cast<size_t> (h - 1)] - sound.partialCents[0]).margin (3.0));
+        }
+    }
+}
+
+TEST_CASE ("Keytrack: notes take the timbre the model predicts at their pitch", "[synth][stage7]")
+{
+    AnalysisSettings s;
+    s.duration = 1.0;
+    s.harmonics = 24;
+    s.autoPitch = true;
+    std::vector<HarmonicSound> sounds;
+    for (const char* family : { "vowel", "reed", "brass" })
+        for (int note : { 48, 60, 72 })
+        {
+            testgen::Options o;
+            o.midiNote = note;
+            o.duration = 1.2;
+            o.detuneCents = 0.0;
+            const auto c = testgen::generate (family, 0, o);
+            sounds.push_back (analyseHarmonics (c.audio, s, c.name + std::to_string (note)));
+        }
+    auto m = std::make_shared<const Model> (trainModel (sounds, s));
+    REQUIRE (m->pitchTracking);
+
+    SynthParams p = at (m->soundZ (0)); // vowel at 48, in residual coordinates
+    p.mode = PlayMode::OneShot;          // rendered frame t = envelope frame t
+    p.noiseDb = -60.0f;
+    p.attack = 0.0005f;
+    const auto audio = renderNotes (m, p, { { 0.0, 1.2, 72, 1.0f } }, 1.2);
+    auto a = s;
+    a.autoPitch = false;
+    a.midiNote = 72;
+    a.tuneSearchCents = 5.0;
+    const auto got = analyseHarmonics (audio, a, "k");
+
+    // Compare spectral shapes (the synth's gain is a constant dB offset).
+    auto error = [&] (const HarmonicSound& want) {
+        std::vector<double> d;
+        for (int t = 20; t < 80; t += 10)
+            for (int h = 0; h < 12; ++h)
+                if (want.at (t, h) > -50.0f)
+                    d.push_back (got.at (t, h) - want.at (t, h));
+        double mean = 0.0, err = 0.0;
+        for (double x : d)
+            mean += x / static_cast<double> (d.size());
+        for (double x : d)
+            err += std::abs (x - mean) / static_cast<double> (d.size());
+        return err;
+    };
+    const double tracked = error (m->decode (m->soundZ (0), m->pitchDelta (72.0)));
+    const double flat = error (m->decode (m->soundZ (0), 0.0f));
+    INFO ("mean |dB| from the keytracked prediction " << tracked << ", from the un-tracked timbre " << flat);
+    CHECK (tracked < 1.0);
+    CHECK (tracked < 0.5 * flat);
+}
+
+TEST_CASE ("A model swapped in plays exactly as in a fresh synth (no stale caches)", "[synth][stage7]")
+{
+    // Two different spaces, each with partial tuning and noise.
+    AnalysisSettings s;
+    s.duration = 1.0;
+    s.harmonics = 24;
+    auto train = [&] (std::initializer_list<const char*> fams) {
+        std::vector<HarmonicSound> sounds;
+        testgen::Options o;
+        o.duration = 1.2;
+        for (const char* f : fams)
+            for (int v = 0; v < 2; ++v)
+            {
+                const auto c = testgen::generate (f, v, o);
+                sounds.push_back (analyseHarmonics (c.audio, s, c.name));
+            }
+        return std::make_shared<const Model> (trainModel (sounds, s));
+    };
+    const auto first = train ({ "piano", "mallet" }), second = train ({ "reed", "bowed", "vowel" });
+
+    auto play = [] (Synth& synth, int blocks) {
+        std::vector<float> out, buf (480);
+        float* ch[] = { buf.data() };
+        MidiEvent on { 0, MidiEvent::Type::NoteOn, 64, 0.8f };
+        for (int b = 0; b < blocks; ++b)
+        {
+            synth.process (ch, 1, 480, &on, b == 0 ? 1 : 0);
+            out.insert (out.end(), buf.begin(), buf.end());
+        }
+        return out;
+    };
+    SynthParams p;
+    p.mode = PlayMode::Loop;
+    Synth used;
+    used.prepare (48000.0);
+    used.setParams (p);
+    used.setModel (first);
+    play (used, 50);
+    used.setModel (second);
+    const auto a = play (used, 30);
+
+    Synth fresh;
+    fresh.prepare (48000.0);
+    fresh.setParams (p);
+    fresh.setModel (second);
+    const auto b = play (fresh, 30);
+    double diff = 0.0;
+    for (size_t i = 0; i < a.size(); ++i)
+        diff = std::max (diff, static_cast<double> (std::abs (a[i] - b[i])));
+    CHECK (diff < 1e-6);
+}

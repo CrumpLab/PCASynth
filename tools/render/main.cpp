@@ -28,6 +28,8 @@ void usage()
                  "    --tilt DB           brightness, dB per octave\n"
                  "    --release S         release time\n"
                  "    --gain DB           output gain\n"
+                 "    --noise DB          residual noise level vs the model (-60 = off)\n"
+                 "    --keytrack K        how much timbre follows pitch (models with pitch tracking)\n"
                  "  movement (Stage 5):\n"
                  "    --walk MODE         drift | jumps | tour | neighbour\n"
                  "    --walk-amount SD    how far (tours: 1 = arrive at each sound)\n"
@@ -76,6 +78,8 @@ int main (int argc, char** argv)
             else if (a == "--tilt") p.tiltDbPerOctave = std::stof (next());
             else if (a == "--release") p.release = std::stof (next());
             else if (a == "--gain") p.gainDb = std::stof (next());
+            else if (a == "--noise") p.noiseDb = std::stof (next());
+            else if (a == "--keytrack") p.keytrack = std::stof (next());
             else if (a == "--scan") p.scanPosition = std::stof (next());
             else if (a == "--loop")
             {

@@ -90,9 +90,9 @@ ControlPanel::ControlPanel (PCASynthProcessor& p) : processor (p)
             gr.knobs.push_back (&add (paramId, label));
         groups.push_back (gr);
     };
-    group ("Point", { { "exaggerate", "Exaggerate" }, { "components", "Components" }, { "morph_time", "Morph Time" } });
+    group ("Point", { { "exaggerate", "Exaggerate" }, { "components", "Components" }, { "morph_time", "Morph Time" }, { "keytrack", "Keytrack" } });
     group ("Playback", { { "loop_start", "Loop Start" }, { "loop_end", "Loop End" }, { "scan_position", "Scan" }, { "speed", "Speed" } }, true);
-    group ("Voice", { { "attack", "Attack" }, { "release", "Release" }, { "brightness", "Brightness" }, { "harmonics", "Harmonics" } });
+    group ("Voice", { { "attack", "Attack" }, { "release", "Release" }, { "brightness", "Brightness" }, { "harmonics", "Harmonics" }, { "noise", "Noise" } });
     group ("Play", { { "velocity", "Velocity" }, { "bend_range", "Bend" }, { "polyphony", "Voices" }, { "gain", "Gain" } });
 
     playMode.addItemList (pcsplugin::playModeNames(), 1);

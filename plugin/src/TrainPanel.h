@@ -39,8 +39,9 @@ private:
     juce::Label hint, status;
     juce::TextEditor title;
     juce::ComboBox note;
-    juce::Slider duration, harmonics, floorDb, components;
-    juce::ToggleButton normalize { "Match loudness" }, trim { "Align onsets" };
+    juce::Slider duration, harmonics, floorDb, components, noiseBands;
+    juce::ToggleButton normalize { "Match loudness" }, trim { "Align onsets" }, partials { "Partial tuning" };
+    juce::ComboBox representation, pitchTracking;
     std::vector<std::unique_ptr<juce::Label>> labels;
     double progressValue = 0.0;
     juce::ProgressBar progress { progressValue };

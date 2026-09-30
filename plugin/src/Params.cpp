@@ -164,6 +164,15 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
     addChoice (l, id::mpeSlideDest, "MPE Slide To", targetNames (true), 2); // PC2
     addFloat (l, id::mpeSlideAmount, "MPE Slide Amount", { -4.0f, 4.0f }, 1.0f, "SD");
     addChoice (l, id::mpeSlideMode, "MPE Slide Mode", { "Bipolar", "Unipolar" }, 0);
+
+    // Stage 7: richer model.
+    l.add (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { id::noise, 1 }, "Noise", juce::NormalisableRange<float> (-60.0f, 12.0f), 0.0f,
+        juce::AudioParameterFloatAttributes().withLabel ("dB").withStringFromValueFunction ([] (float v, int) {
+            return v <= -59.9f ? juce::String ("off") : juce::String (v, 1) + " dB";
+        })));
+    l.add (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { id::keytrack, 1 }, "Keytrack",
+                                                        juce::NormalisableRange<float> (0.0f, 1.5f), 1.0f, percent()));
     return l;
 }
 
@@ -219,6 +228,8 @@ ParamReader::ParamReader (juce::AudioProcessorValueTreeState& s)
     mpeSlideDest = s.getRawParameterValue (id::mpeSlideDest);
     mpeSlideAmount = s.getRawParameterValue (id::mpeSlideAmount);
     mpeSlideMode = s.getRawParameterValue (id::mpeSlideMode);
+    noise = s.getRawParameterValue (id::noise);
+    keytrack = s.getRawParameterValue (id::keytrack);
     for (int n = 0; n < 2; ++n)
         lfos[static_cast<size_t> (n)] = { s.getRawParameterValue (id::lfo (n, "on")), s.getRawParameterValue (id::lfo (n, "shape")),
                                           s.getRawParameterValue (id::lfo (n, "rate")), s.getRawParameterValue (id::lfo (n, "sync")),
@@ -292,6 +303,8 @@ pcs::SynthParams ParamReader::read (const std::array<float, pcs::kMaxComponents>
     p.mpe.smoothing = get (mpeSmoothing);
     p.mpe.slide = { index (mpeSlideDest) - 1, get (mpeSlideAmount) };
     p.mpe.slideBipolar = index (mpeSlideMode) == 0;
+    p.noiseDb = get (noise);
+    p.keytrack = get (keytrack);
     return p;
 }
 

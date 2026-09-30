@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.7.0] - 2026-09-30
+
+### Stage 7: richer model
+- **Residual noise:** breath, bow and hammer noise measured in 16 bands
+  between the partials, resynthesised with calibrated band-pass filters per
+  voice. New **Noise** knob.
+- **Partial tuning:** stretched, inharmonic partials are tracked, learned and
+  played at their frequencies.
+- **Timbre follows pitch:** train on several notes per instrument and each
+  note gets its register's timbre. Pitch tracking is Auto, On or Off; new
+  **Keytrack** knob.
+- **Representations:** decibels, shape + loudness, or linear.
+- The Train panel has the new options. The envelope view shows noise. The
+  model summary lists what a space contains.
+- Model file format 2; version 1 files still load.
+- `pcs-train --noise-bands --no-partials --representation --pitch-tracking`,
+  `pcs-render --noise --keytrack`. Listening examples 15–18.
+
+### Fixed
+- A model swapped in could keep the previous model's partial tuning.
+- Noise gains could be corrupted during loop crossfades.
+
 ## [0.6.0] - 2026-09-30
 
 ### Stage 6: MPE (for the Osmose)

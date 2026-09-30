@@ -1,6 +1,7 @@
 // pcs-examples: renders the listening examples for a model trained on a
 // folder of sounds, plus a map of the sound space (SVG).
 #include "Render.h"
+#include "TrainingSet.h"
 
 #include <algorithm>
 #include <cmath>
@@ -185,7 +186,7 @@ int main (int argc, char** argv)
             original.channels[0].resize (static_cast<size_t> (std::min<double> (original.numSamples(), (model->durationSeconds() + 0.1) * original.sampleRate)));
             normalisePeak (original, 0.7f);
             const auto analysed = analyseHarmonics (readWav ((trainDir / (name + ".wav")).string()), settings, name);
-            const auto direct = singleSoundModel (analysed, settings);
+            const auto direct = tools::singleSoundModel (analysed, settings);
             SynthParams dp;
             auto harmonicOnly = renderNotes (direct, dp, { { 0.0, model->durationSeconds(), 60, 0.8f } }, model->durationSeconds() + 0.1);
             normalisePeak (harmonicOnly, 0.7f);
@@ -394,6 +395,116 @@ int main (int argc, char** argv)
             lfo.mod.lfo[1] = { true, LfoShape::SmoothRandom, 1.5f, false, 4.0f, 1.0f, 1 };
             write ("14_lfos", renderNotes (model, lfo, pad (16.0), 17.0),
                    "Two LFOs: a slow sine on PC1 (±2 SD, 4 s cycle) and a smooth random LFO on PC2 (±1 SD).");
+        }
+
+        // 15-18. Stage 7: noise, partial tuning, timbre following pitch, representations.
+        {
+            auto trainingWav = [&] (const std::string& name) { return readWav ((trainDir / (name + ".wav")).string()); };
+            auto noteOf = [] (const std::shared_ptr<const Model>& m, SynthParams p, int note = 60) {
+                const double d = m->durationSeconds();
+                auto a = renderNotes (m, p, { { 0.0, d, note, 0.8f } }, d + 0.1);
+                normalisePeak (a, 0.7f);
+                return a;
+            };
+            auto original = [&] (const std::string& name) {
+                auto o = trainingWav (name);
+                o.channels.resize (1);
+                o.channels[0].resize (static_cast<size_t> (std::min<double> (o.numSamples(), (model->durationSeconds() + 0.1) * o.sampleRate)));
+                normalisePeak (o, 0.7f);
+                return o;
+            };
+
+            if (has (pick ("flute", 0)))
+            {
+                const auto name = pick ("flute", 0);
+                SynthParams p = at (zOf (name));
+                auto noNoise = p;
+                noNoise.noiseDb = -60.0f;
+                auto loud = p;
+                loud.noiseDb = 9.0f;
+                write ("15_noise_" + name, sequence ({ original (name), oneNote (noNoise), oneNote (p), oneNote (loud) }, 0.6),
+                       "Residual noise: " + name + " original | harmonics only | with its breath noise | noise +9 dB.");
+            }
+
+            if (has (pick ("piano", 0)))
+            {
+                const auto name = pick ("piano", 0);
+                auto exact = settings;
+                exact.trackPartials = false;
+                auto tuned = settings;
+                tuned.trackPartials = true;
+                const auto audio = trainingWav (name);
+                const auto withPartials = std::make_shared<const Model> (pcs::singleSoundModel (analyseHarmonics (audio, tuned, name), tuned));
+                const auto harmonic = std::make_shared<const Model> (pcs::singleSoundModel (analyseHarmonics (audio, exact, name), exact));
+                SynthParams p;
+                p.noiseDb = -60.0f;
+                write ("16_partials_" + name, sequence ({ original (name), noteOf (harmonic, p), noteOf (withPartials, p) }, 0.6),
+                       "Partial tuning: " + name + " original | exact harmonics | its stretched partials (inharmonicity).");
+            }
+
+            // A small multi-pitch set: four families at C3, C4 and C5.
+            {
+                auto s7 = settings;
+                s7.autoPitch = true;
+                s7.duration = 2.0;
+                std::vector<HarmonicSound> sounds;
+                for (const char* family : { "vowel", "reed", "brass", "bowed" })
+                    for (int note : { 48, 60, 72 })
+                    {
+                        testgen::Options o;
+                        o.midiNote = note;
+                        o.duration = 2.2;
+                        const auto clip = testgen::generate (family, 0, o);
+                        sounds.push_back (analyseHarmonics (clip.audio, s7, clip.name + "_" + std::to_string (note)));
+                    }
+                const auto multi = std::make_shared<const Model> (trainModel (sounds, s7));
+                SynthParams p;
+                p.mode = PlayMode::Loop;
+                p.release = 0.2f;
+                const auto z = multi->soundZ (1); // vowel at C4 (pitch taken out)
+                for (size_t j = 0; j < z.size(); ++j)
+                    p.z[j] = z[j];
+                std::vector<Note> ns;
+                const std::vector<int> tune { 43, 48, 55, 60, 67, 72, 79, 84 };
+                for (size_t i = 0; i < tune.size(); ++i)
+                    ns.push_back ({ 0.45 * static_cast<double> (i), 0.4, tune[i], 0.8f });
+                auto flat = p;
+                flat.keytrack = 0.0f;
+                AudioBuffer both;
+                both.sampleRate = 48000.0;
+                append (both, renderNotes (multi, flat, ns, 0.45 * tune.size() + 0.4));
+                appendSilence (both, 0.6);
+                append (both, renderNotes (multi, p, ns, 0.45 * tune.size() + 0.4));
+                write ("17_keytrack", both,
+                       "Timbre following pitch: a model trained on 4 instruments at C3, C4, C5 plays a vowel from G2 to C6, "
+                       "first with Keytrack 0 (one timbre everywhere), then 100 % (each note in its register's timbre).");
+            }
+
+            // The same morph (pluck -> vowel) in each representation.
+            if (has (pick ("pluck", 0)) && has (pick ("vowel", 1)))
+            {
+                std::vector<HarmonicSound> sounds;
+                for (int i = 0; i < model->numSounds(); ++i)
+                    sounds.push_back (analyseHarmonics (trainingWav (model->names[static_cast<size_t> (i)]), settings, model->names[static_cast<size_t> (i)]));
+                std::vector<AudioBuffer> parts;
+                for (auto rep : { Representation::Decibels, Representation::ShapeLoudness, Representation::Linear })
+                {
+                    auto sr = settings;
+                    sr.representation = rep;
+                    const auto m = std::make_shared<const Model> (trainModel (sounds, sr));
+                    const auto a = m->soundZ (m->soundIndex (pick ("pluck", 0))), b = m->soundZ (m->soundIndex (pick ("vowel", 1)));
+                    for (float t : { 0.0f, 0.5f, 1.0f })
+                    {
+                        SynthParams p;
+                        for (size_t j = 0; j < a.size(); ++j)
+                            p.z[j] = a[j] + t * (b[j] - a[j]);
+                        parts.push_back (noteOf (m, p));
+                    }
+                }
+                write ("18_representations", sequence (parts),
+                       "The same morph (" + pick ("pluck", 0) + " -> " + pick ("vowel", 1) + ": start, halfway, end) in three "
+                       "representations: decibels, shape + loudness, linear. Linear's halfway point is closest to a crossfade.");
+            }
         }
 
         writeMap (outDir / "map.svg");

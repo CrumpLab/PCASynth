@@ -31,7 +31,9 @@ inline const juce::String components = "components", exaggerate = "exaggerate", 
                           mpeOn = "mpe_on", mpeZone = "mpe_zone", mpeBendRange = "mpe_bend_range",
                           mpePressDest = "mpe_press_dest", mpePressAmount = "mpe_press_amount",
                           mpePressCurve = "mpe_press_curve", mpeSmoothing = "mpe_smoothing",
-                          mpeSlideDest = "mpe_slide_dest", mpeSlideAmount = "mpe_slide_amount", mpeSlideMode = "mpe_slide_mode";
+                          mpeSlideDest = "mpe_slide_dest", mpeSlideAmount = "mpe_slide_amount", mpeSlideMode = "mpe_slide_mode",
+                          // Stage 7
+                          noise = "noise", keytrack = "keytrack";
 inline juce::String lfo (int n, const char* what) { return "lfo" + juce::String (n + 1) + "_" + what; }
 }
 
@@ -66,7 +68,7 @@ private:
         *walkFocus, *walkPerVoice, *walkSeed, *walkRestart, *walkFreeze, *velDest, *velAmount, *mwDest, *mwAmount, *atDest,
         *atAmount, *macro, *voiceSpread;
     std::atomic<float>*mpeOn, *mpeZone, *mpeBendRange, *mpePressDest, *mpePressAmount, *mpePressCurve, *mpeSmoothing,
-        *mpeSlideDest, *mpeSlideAmount, *mpeSlideMode;
+        *mpeSlideDest, *mpeSlideAmount, *mpeSlideMode, *noise, *keytrack;
     struct LfoRefs
     {
         std::atomic<float>*on, *shape, *rate, *sync, *syncLen, *depth, *target;

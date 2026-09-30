@@ -95,10 +95,22 @@ void PCASynthEditor::refreshModel()
     for (int j = 0; j < std::min (pcsplugin::kNumPcParams, m->numComponents()); ++j)
         explained += m->varianceExplained (j);
     const auto name = juce::String (m->title.empty() ? "Untitled" : m->title) + (processor.isFactoryModel() ? " (factory)" : "");
+    juce::StringArray extras;
+    if (m->numNoiseBands > 0)
+        extras.add ("noise");
+    if (m->hasPartials)
+        extras.add ("partial tuning");
+    if (m->pitchTracking)
+        extras.add ("timbre follows pitch");
+    if (m->representation == pcs::Representation::ShapeLoudness)
+        extras.add ("shape + loudness");
+    else if (m->representation == pcs::Representation::Linear)
+        extras.add ("linear");
     modelInfo.setText (name + "  |  " + juce::String (m->numSounds()) + " sounds, " + juce::String (m->numComponents())
-                           + " components, " + juce::String (m->numHarmonics) + " harmonics, "
+                           + " components, " + juce::String (m->numHarmonics) + " harmonics"
+                           + (extras.isEmpty() ? juce::String() : " + " + extras.joinIntoString (", ")) + ", "
                            + juce::String (m->durationSeconds(), 1) + " s  |  PC1-16 explain "
-                           + juce::String (juce::roundToInt (100.0 * explained)) + " % of the variance",
+                           + juce::String (juce::roundToInt (100.0 * explained)) + " %",
                        juce::dontSendNotification);
 }
 

@@ -30,7 +30,8 @@ private:
     std::shared_ptr<const pcs::Model> model;
     std::array<float, pcs::kMaxComponents> shown {};
     bool dirty = true;
-    std::vector<float> db;
+    std::vector<float> db, noise;
+    float pitchDelta = 0.0f;
     juce::Image image;
     std::array<float, pcs::Synth::kMaxVoices> playheads {};
     int numPlayheads = 0;

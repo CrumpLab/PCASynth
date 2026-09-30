@@ -312,6 +312,7 @@ TEST_CASE ("Same seed, same path; restart on note repeats it", "[walk][synth]")
     p.mod.walk.seed = 42;
     p.mod.walk.restartOnNote = true;
     p.release = 0.05f;
+    p.noiseDb = -60.0f; // the walk's path repeats; residual noise is fresh on every note, by design
     // Two identical phrases separated by silence.
     const std::vector<tools::Note> notes { { 0.0, 1.0, 60, 0.8f }, { 2.0, 1.0, 60, 0.8f } };
     const auto a = tools::renderNotes (m, p, notes, 3.0);

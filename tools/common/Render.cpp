@@ -62,19 +62,7 @@ AudioBuffer renderNotes (std::shared_ptr<const Model> model, const SynthParams& 
 
 std::shared_ptr<Model> singleSoundModel (const HarmonicSound& sound, const AnalysisSettings& settings)
 {
-    auto m = std::make_shared<Model>();
-    m->analysis = settings;
-    m->numFrames = sound.numFrames;
-    m->numHarmonics = sound.numHarmonics;
-    m->frameRate = sound.frameRate;
-    m->floorDb = static_cast<float> (settings.floorDb);
-    m->names = { sound.name };
-    m->pca.numRows = 1;
-    m->pca.dims = m->dims();
-    m->pca.mean = sound.db;
-    m->pca.totalVariance = 1.0;
-    m->finalize();
-    return m;
+    return std::make_shared<Model> (pcs::singleSoundModel (sound, settings));
 }
 
 std::vector<std::string> collectWavs (const std::vector<std::string>& paths)

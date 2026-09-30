@@ -147,6 +147,11 @@ int main()
     double diff = 0.0;
     for (size_t i = 0; i < outA.size(); ++i)
         diff = std::max (diff, static_cast<double> (std::abs (outA[i] - outB[i])));
+    size_t firstDiff = 0;
+    while (firstDiff < outA.size() && std::abs (outA[firstDiff] - outB[firstDiff]) < 1e-6f)
+        ++firstDiff;
+    if (diff >= 1e-6)
+        std::printf ("     (max difference %g, first at sample %zu)\n", diff, firstDiff);
     check (rms (outA, 0.1, 0.4) > 0.005 && diff < 1e-6, "restored instance renders identically");
 
     // ---- factory state stays small; a damaged model falls back to factory ----
@@ -418,6 +423,60 @@ int main()
         const int no = o->getVoiceInfo (info, 4);
         check (no == 2 && std::abs (info[0].bendSemitones) < 1e-6f && std::abs (info[1].bendSemitones) < 1e-6f,
                "with MPE off, channels are ignored as before");
+    }
+
+    // ---- Stage 7: richer model ----
+    {
+        auto r = fresh();
+        const auto fm = r->getModel();
+        check (fm->numNoiseBands == 16 && fm->hasPartials, "the factory space has noise bands and partial tuning");
+        setParam (*r, "noise", -12.0f);
+        setParam (*r, "keytrack", 0.5f);
+        const auto sp = r->currentSynthParams();
+        check (std::abs (sp.noiseDb + 12.0f) < 0.01f && std::abs (sp.keytrack - 0.5f) < 0.01f, "Noise and Keytrack reach the synth");
+
+        // Training options: the model is built as asked, and they are saved.
+        auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("pcs-train-7");
+        dir.deleteRecursively();
+        dir.createDirectory();
+        int i = 0;
+        for (const char* family : { "vowel", "reed", "brass" })
+            for (int note : { 48, 60, 72 })
+            {
+                pcs::testgen::Options o;
+                o.midiNote = note;
+                o.duration = 1.4;
+                auto clip = pcs::testgen::generate (family, 0, o);
+                pcs::writeWav (dir.getChildFile (juce::String (family) + "_" + juce::String (note) + ".wav").getFullPathName().toStdString(), clip.audio);
+                ++i;
+            }
+        auto& tr = r->getTrainer();
+        tr.addFiles ({ dir.getFullPathName() });
+        auto ts = tr.getSettings();
+        ts.analysis.autoPitch = true;
+        ts.analysis.duration = 1.2;
+        ts.analysis.harmonics = 24;
+        ts.analysis.noiseBands = 8;
+        ts.analysis.trackPartials = false;
+        ts.analysis.representation = pcs::Representation::ShapeLoudness;
+        ts.analysis.pitchTracking = pcs::PitchTracking::On;
+        tr.setSettings (ts);
+        juce::String err;
+        const auto tm = tr.trainNow (err);
+        check (tm != nullptr && tm->numNoiseBands == 8 && ! tm->hasPartials && tm->representation == pcs::Representation::ShapeLoudness
+                   && tm->pitchTracking,
+               "training options shape the model (noise bands, partials, representation, pitch tracking)");
+        juce::MemoryBlock st;
+        r->getStateInformation (st);
+        auto r2 = fresh();
+        r2->setStateInformation (st.getData(), static_cast<int> (st.getSize()));
+        const auto back = r2->getTrainer().getSettings().analysis;
+        check (back.noiseBands == 8 && ! back.trackPartials && back.representation == pcs::Representation::ShapeLoudness
+                   && back.pitchTracking == pcs::PitchTracking::On && r2->getModel()->pitchTracking,
+               "and they are saved with the state, along with the model");
+        const auto tracked = playNote (*r2, 67, 0.8, 1.0);
+        check (rms (tracked, 0.1, 0.7) > 0.005, "a pitch-tracked space plays");
+        dir.deleteRecursively();
     }
 
     std::printf (failures == 0 ? "all plugin checks passed\n" : "%d plugin checks FAILED\n", failures);

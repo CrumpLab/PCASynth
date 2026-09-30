@@ -31,7 +31,10 @@ std::unique_ptr<Synth::ModelSlot> Synth::makeSlot (std::shared_ptr<const Model> 
         throw std::invalid_argument ("model has more harmonics than the synth plays");
     if (model != nullptr)
     {
-        slot->cache.assign (static_cast<size_t> (model->dims()), 0.0f);
+        if (model->numNoiseBands > kMaxNoiseBands)
+            throw std::invalid_argument ("model has more noise bands than the synth plays");
+        slot->cache.assign (static_cast<size_t> (model->numFrames * model->numHarmonics), 0.0f);
+        slot->noiseCache.assign (static_cast<size_t> (model->numFrames * model->numNoiseBands), 0.0f);
         slot->stamps.assign (static_cast<size_t> (model->numFrames), 0);
         for (int i = 0; i < model->numSounds(); ++i)
         {
@@ -58,7 +61,8 @@ void Synth::swapModel (std::unique_ptr<ModelSlot>& slot) noexcept
     std::swap (current, slot); // an empty slot means "no model"
     if (current != nullptr)
         std::fill (current->stamps.begin(), current->stamps.end(), 0u);
-    stamp = 1;
+    // `stamp` keeps counting (never back to 1): caches outside the slot, like the
+    // partial tuning, must never mistake an old model's values for the new one's.
     reset();
 }
 
@@ -77,6 +81,8 @@ void Synth::reset() noexcept
     for (size_t i = 0; i < lfos.size(); ++i)
         lfos[i].reset (walkSeed + 101u * static_cast<uint32_t> (i + 1));
     modWheel = pressure = 0.0f;
+    noteCounter = 0; // noise seeds come from it: renders after a reset are reproducible
+    centsStamp = 0;
     chBend.fill (0.0f);
     chPressure.fill (0.0f);
     chSlide.fill (64.0f / 127.0f);
@@ -250,6 +256,22 @@ void Synth::noteOn (int note, float velocity, int channel) noexcept
     v->pressureSmooth = std::pow (v->pressure, std::pow (3.0f, -std::clamp (params.mpe.pressureCurve, -1.0f, 1.0f)));
     v->slide = v->slideSmooth = v->follows ? chSlide[ch] : 64.0f / 127.0f;
     v->walk.reset (params.mod.walk.seed * 7919u + static_cast<uint32_t> (noteCounter + 1));
+    v->nz1 = {};
+    v->nz2 = {};
+    v->nGain = {};
+    v->numNoiseBands = 0;
+    for (size_t b = 0; b < v->noiseRng.size(); ++b)
+    {
+        v->noiseRng[b] = (0x9e3779b9u + static_cast<uint32_t> (b) * 0x85ebca6bu) ^ static_cast<uint32_t> (noteCounter * 2654435761u);
+        if (v->noiseRng[b] == 0)
+            v->noiseRng[b] = 1;
+    }
+    v->cents = {};
+    if (const Model* m = model(); m != nullptr && m->hasPartials)
+    {
+        // Start at the right partial frequencies (they are refined every sub-block).
+        m->decodePartials (heard.data(), kMaxComponents, v->cents.data(), keytracking() ? m->pitchDelta (note, params.keytrack) : 0.0f);
+    }
     v->spread = {};
     if (params.mod.voiceSpread > 0.0f)
         for (int j = 0; j < 8; ++j)
@@ -297,62 +319,130 @@ void Synth::noteOff (int note, int channel) noexcept
 void Synth::setVoiceFrequency (Voice& v) noexcept
 {
     v.freq = midiToHz (v.note + bend * params.pitchBendRange + v.noteBend * params.mpe.noteBendRange);
-    const int modelH = model() != nullptr ? model()->numHarmonics : 0;
+    const Model* m = model();
+    const int modelH = m != nullptr ? m->numHarmonics : 0;
     const int limit = std::min (modelH, std::max (1, params.maxHarmonics));
+    // Partial frequencies: harmonics, shifted by the model's partial offsets (inharmonicity).
     int n = 0;
-    while (n < limit && (n + 1) * v.freq < 0.47 * sr)
+    while (n < limit)
+    {
+        const double f = (n + 1) * v.freq * std::exp2 (v.cents[static_cast<size_t> (n)] / 1200.0);
+        if (f >= 0.47 * sr)
+            break;
+        v.hf[static_cast<size_t> (n)] = static_cast<float> (f);
         ++n;
+    }
     for (int h = v.numHarmonics; h < n; ++h)
         v.amp[static_cast<size_t> (h)] = 0.0f; // newly audible harmonics fade in from silence
     v.numHarmonics = n;
     for (int h = 0; h < n; ++h)
     {
-        const double w = kTwoPi * (h + 1) * v.freq / sr;
+        const double w = kTwoPi * v.hf[static_cast<size_t> (h)] / sr;
         v.cr[static_cast<size_t> (h)] = static_cast<float> (std::cos (w));
         v.ci[static_cast<size_t> (h)] = static_cast<float> (std::sin (w));
     }
+
+    // Noise bands: band-pass filters (RBJ, 0 dB peak) spanning each band, which
+    // sits at fixed multiples of the played fundamental. nNorm scales unit-variance
+    // white noise to unit RMS out of the filter: for H = b0 (1 - z^-2) / (1 + a1 z^-1
+    // + a2 z^-2) the output variance is 2 b0² / (1 - a2) = alpha / (1 + alpha),
+    // exact up to Nyquist (the analog π/2 × bandwidth rule is not).
+    const int bands = m != nullptr ? std::min (m->numNoiseBands, kMaxNoiseBands) : 0;
+    int nb = 0;
+    for (; nb < bands; ++nb)
+    {
+        const double lo = noiseBandEdge (nb, bands) * v.freq, hi = noiseBandEdge (nb + 1, bands) * v.freq;
+        if (lo >= 0.47 * sr)
+            break;
+        const double top = std::min (hi, 0.49 * sr);
+        const double fc = std::sqrt (lo * top), bw = std::max (1.0, top - lo);
+        const double w = kTwoPi * fc / sr;
+        const double alpha = std::sin (w) * bw / (2.0 * fc);
+        const double a0 = 1.0 + alpha;
+        const auto b = static_cast<size_t> (nb);
+        v.nb0[b] = static_cast<float> (alpha / a0);
+        v.na1[b] = static_cast<float> (-2.0 * std::cos (w) / a0);
+        v.na2[b] = static_cast<float> ((1.0 - alpha) / a0);
+        v.nNorm[b] = static_cast<float> (std::sqrt ((1.0 + alpha) / alpha));
+        v.nFc[b] = static_cast<float> (fc);
+    }
+    for (int b = v.numNoiseBands; b < nb; ++b)
+        v.nGain[static_cast<size_t> (b)] = 0.0f;
+    v.numNoiseBands = nb;
 }
 
-const float* Synth::frame (int t) noexcept
+bool Synth::keytracking() const noexcept
+{
+    const Model* m = model();
+    return m != nullptr && m->pitchTracking && params.keytrack != 0.0f;
+}
+
+int Synth::frame (int t) noexcept
 {
     const auto& m = *current->model;
     t = std::clamp (t, 0, m.numFrames - 1);
-    float* dst = current->cache.data() + static_cast<size_t> (t) * static_cast<size_t> (m.numHarmonics);
     if (current->stamps[static_cast<size_t> (t)] != stamp)
     {
-        m.decodeFrame (t, heard.data(), kMaxComponents, scratchDb.data());
         const float floorLin = std::pow (10.0f, m.floorDb / 20.0f);
+        float* dst = current->cache.data() + static_cast<size_t> (t) * static_cast<size_t> (m.numHarmonics);
+        m.decodeFrame (t, heard.data(), kMaxComponents, scratchDb.data());
         for (int h = 0; h < m.numHarmonics; ++h)
             dst[h] = std::max (0.0f, std::pow (10.0f, scratchDb[static_cast<size_t> (h)] / 20.0f) - floorLin);
+        if (m.numNoiseBands > 0)
+        {
+            float* nd = current->noiseCache.data() + static_cast<size_t> (t) * static_cast<size_t> (m.numNoiseBands);
+            m.decodeNoiseFrame (t, heard.data(), kMaxComponents, cacheScratchN.data()); // not scratchN: callers hold targets there
+            for (int b = 0; b < m.numNoiseBands; ++b)
+                nd[b] = std::max (0.0f, std::pow (10.0f, cacheScratchN[static_cast<size_t> (b)] / 20.0f) - floorLin);
+        }
         current->stamps[static_cast<size_t> (t)] = stamp;
     }
-    return dst;
+    return t;
 }
 
-void Synth::frameAt (const Voice& v, double pos, float* dst) noexcept
+void Synth::frameAt (const Voice& v, double pos, float* dst, float* noise) noexcept
 {
     const auto& m = *current->model;
-    const int h = m.numHarmonics;
+    const int h = m.numHarmonics, nb = m.numNoiseBands;
     const int t0 = std::clamp (static_cast<int> (std::floor (pos)), 0, m.numFrames - 1);
     const int t1 = std::min (t0 + 1, m.numFrames - 1);
     const auto frac = static_cast<float> (pos - std::floor (pos));
     if (! v.ownPoint)
     {
-        const float* a = frame (t0);
-        const float* b = frame (t1);
+        frame (t0);
+        frame (t1);
+        const float* a = current->cache.data() + static_cast<size_t> (t0 * h);
+        const float* b = current->cache.data() + static_cast<size_t> (t1 * h);
         for (int i = 0; i < h; ++i)
             dst[i] = a[i] + frac * (b[i] - a[i]);
+        if (noise != nullptr && nb > 0)
+        {
+            const float* na = current->noiseCache.data() + static_cast<size_t> (t0 * nb);
+            const float* nbb = current->noiseCache.data() + static_cast<size_t> (t1 * nb);
+            for (int i = 0; i < nb; ++i)
+                noise[i] = na[i] + frac * (nbb[i] - na[i]);
+        }
         return;
     }
-    // The voice's own point: decode both frames for it (no cache).
+    // The voice's own point (and pitch, with keytracking): decode both frames for it.
     const float floorLin = std::pow (10.0f, m.floorDb / 20.0f);
-    m.decodeFrame (t0, v.point.data(), kMaxComponents, scratchDb.data());
-    m.decodeFrame (t1, v.point.data(), kMaxComponents, scratchC.data());
+    auto lin = [floorLin] (float db) { return std::max (0.0f, std::pow (10.0f, db / 20.0f) - floorLin); };
+    m.decodeFrame (t0, v.point.data(), kMaxComponents, scratchDb.data(), v.pitchDelta);
+    m.decodeFrame (t1, v.point.data(), kMaxComponents, scratchC.data(), v.pitchDelta);
     for (int i = 0; i < h; ++i)
     {
-        const float a = std::max (0.0f, std::pow (10.0f, scratchDb[static_cast<size_t> (i)] / 20.0f) - floorLin);
-        const float b = std::max (0.0f, std::pow (10.0f, scratchC[static_cast<size_t> (i)] / 20.0f) - floorLin);
+        const float a = lin (scratchDb[static_cast<size_t> (i)]), b = lin (scratchC[static_cast<size_t> (i)]);
         dst[i] = a + frac * (b - a);
+    }
+    if (noise != nullptr && nb > 0)
+    {
+        m.decodeNoiseFrame (t0, v.point.data(), kMaxComponents, scratchN2.data(), v.pitchDelta);
+        m.decodeNoiseFrame (t1, v.point.data(), kMaxComponents, scratchN4.data(), v.pitchDelta);
+        for (int i = 0; i < nb; ++i)
+        {
+            const float a = lin (scratchN2[static_cast<size_t> (i)]), b = lin (scratchN4[static_cast<size_t> (i)]);
+            noise[i] = a + frac * (b - a);
+        }
     }
 }
 
@@ -442,13 +532,17 @@ void Synth::modulate (int n) noexcept
     const bool perVoice = own > 0.0f || mp.velocity.destination >= 0 || mp.voiceSpread > 0.0f || mpeMoves;
     const float smooth = 1.0f - std::exp (-static_cast<float> (dt) / std::max (0.001f, mpe.smoothing));
     const float gamma = std::pow (3.0f, -std::clamp (mpe.pressureCurve, -1.0f, 1.0f));
+    const bool keytrack = keytracking();
     for (auto& v : voices)
     {
         if (! v.active)
             continue;
-        v.ownPoint = perVoice;
+        v.ownPoint = perVoice || keytrack;
         if (! perVoice)
+        {
+            v.point = heard;
             continue;
+        }
         if (own > 0.0f)
             v.walk.advance (dt, w, step, heard, current->soundZ, current->relSd);
         auto& pt = v.point;
@@ -572,15 +666,45 @@ void Synth::renderVoice (Voice& v, float* out, int n) noexcept
     const bool finished = v.releasing && v.env < 1e-4f;
     const float envEnd = finished ? 0.0f : v.env;
 
+    // Timbre following pitch (keytrack), and the partials' tuning at this point.
+    v.pitchDelta = keytracking() ? m.pitchDelta (v.note + bend * params.pitchBendRange + v.noteBend * params.mpe.noteBendRange, params.keytrack) : 0.0f;
+    if (m.hasPartials)
+    {
+        const float* want = heardCents.data();
+        if (v.ownPoint)
+        {
+            m.decodePartials (v.point.data(), kMaxComponents, scratchC.data(), v.pitchDelta);
+            want = scratchC.data();
+        }
+        else if (centsStamp != stamp)
+        {
+            m.decodePartials (heard.data(), kMaxComponents, heardCents.data());
+            centsStamp = stamp;
+        }
+        bool changed = false;
+        for (int h = 0; h < m.numHarmonics && ! changed; ++h)
+            changed = std::abs (want[h] - v.cents[static_cast<size_t> (h)]) > 0.01f;
+        if (changed)
+        {
+            std::copy (want, want + m.numHarmonics, v.cents.begin());
+            setVoiceFrequency (v);
+        }
+    }
+
     // Target amplitudes at the end of this sub-block.
+    const bool noiseOn = m.numNoiseBands > 0 && params.noiseDb > -59.9f;
     float* target = scratchA.data();
-    frameAt (v, v.pos, target);
+    float* noiseTarget = noiseOn ? scratchN.data() : nullptr;
+    frameAt (v, v.pos, target, noiseTarget);
     if (crossfade)
     {
-        frameAt (v, v.pos - loopLen, scratchB.data());
+        frameAt (v, v.pos - loopLen, scratchB.data(), noiseOn ? scratchN3.data() : nullptr);
         const auto g = static_cast<float> (xfFrac);
         for (int h = 0; h < v.numHarmonics; ++h)
             target[h] += g * (scratchB[static_cast<size_t> (h)] - target[h]);
+        if (noiseOn)
+            for (int b = 0; b < m.numNoiseBands; ++b)
+                noiseTarget[b] += g * (scratchN3[static_cast<size_t> (b)] - noiseTarget[b]);
     }
     const float level = std::pow (10.0f, params.gainDb / 20.0f) * v.gain * envEnd;
     const float nyquistFadeStart = 0.40f * static_cast<float> (sr), nyquistFadeEnd = 0.47f * static_cast<float> (sr);
@@ -589,7 +713,7 @@ void Synth::renderVoice (Voice& v, float* out, int n) noexcept
         float g = level;
         if (params.tiltDbPerOctave != 0.0f)
             g *= std::pow (10.0f, params.tiltDbPerOctave * std::log2 (static_cast<float> (h + 1)) / 20.0f);
-        const auto f = static_cast<float> ((h + 1) * v.freq);
+        const float f = v.hf[static_cast<size_t> (h)];
         if (f > nyquistFadeStart)
             g *= std::clamp ((nyquistFadeEnd - f) / (nyquistFadeEnd - nyquistFadeStart), 0.0f, 1.0f);
         target[h] *= g;
@@ -620,6 +744,50 @@ void Synth::renderVoice (Voice& v, float* out, int n) noexcept
         v.re[hs] = re * k;
         v.im[hs] = im * k;
         v.amp[hs] = t;
+    }
+
+    // Residual noise: white noise through each band's filter, gains ramping
+    // across the sub-block like the harmonics.
+    if (noiseOn || v.numNoiseBands > 0)
+    {
+        const float noiseLevel = noiseOn ? level * std::pow (10.0f, params.noiseDb / 20.0f) : 0.0f;
+        std::array<float, kMaxNoiseBands> dg {};
+        bool any = false;
+        for (int b = 0; b < v.numNoiseBands; ++b)
+        {
+            const auto bs = static_cast<size_t> (b);
+            float g = noiseOn ? noiseTarget[b] * v.nNorm[bs] * noiseLevel : 0.0f;
+            if (g > 0.0f && params.tiltDbPerOctave != 0.0f)
+                g *= std::pow (10.0f, params.tiltDbPerOctave * std::log2 (v.nFc[bs] / static_cast<float> (v.freq)) / 20.0f);
+            if (v.nFc[bs] > nyquistFadeStart)
+                g *= std::clamp ((nyquistFadeEnd - v.nFc[bs]) / (nyquistFadeEnd - nyquistFadeStart), 0.0f, 1.0f);
+            dg[bs] = (g - v.nGain[bs]) * invN;
+            any = any || g > 0.0f || v.nGain[bs] > 0.0f;
+        }
+        if (any)
+        {
+            constexpr float kUnitVariance = 1.7320508f / 2147483648.0f; // uniform int32 -> variance 1
+            for (int i = 0; i < n; ++i)
+            {
+                float acc = 0.0f;
+                for (int b = 0; b < v.numNoiseBands; ++b)
+                {
+                    const auto bs = static_cast<size_t> (b);
+                    auto& r = v.noiseRng[bs];
+                    r ^= r << 13;
+                    r ^= r >> 17;
+                    r ^= r << 5;
+                    const float x = static_cast<float> (static_cast<int32_t> (r)) * kUnitVariance;
+                    // Transposed direct form II band-pass (b1 = 0, b2 = -b0).
+                    const float y = v.nb0[bs] * x + v.nz1[bs];
+                    v.nz1[bs] = -v.na1[bs] * y + v.nz2[bs];
+                    v.nz2[bs] = -v.nb0[bs] * x - v.na2[bs] * y;
+                    v.nGain[bs] += dg[bs];
+                    acc += v.nGain[bs] * y;
+                }
+                out[i] += acc;
+            }
+        }
     }
 
     if (finished)

@@ -25,7 +25,8 @@ TrainPanel::TrainPanel (PCASynthProcessor& p) : processor (p), trainer (p.getTra
 
     for (auto* c : std::initializer_list<juce::Component*> { &addFiles, &addFolder, &removeButton, &clearButton, &trainButton,
                                                             &closeButton, &hint, &status, &title, &note, &duration, &harmonics,
-                                                            &floorDb, &components, &normalize, &trim, &progress })
+                                                            &floorDb, &components, &normalize, &trim, &progress, &noiseBands,
+                                                            &partials, &representation, &pitchTracking })
         addAndMakeVisible (c);
 
     addFiles.onClick = [this] { chooseFiles (false); };
@@ -58,10 +59,13 @@ TrainPanel::TrainPanel (PCASynthProcessor& p) : processor (p), trainer (p.getTra
     setup (harmonics, 8, pcs::kMaxModelHarmonics, 1, "");
     setup (floorDb, -120, -40, 1, " dB");
     setup (components, 1, pcs::kMaxComponents, 1, "");
+    setup (noiseBands, 0, 32, 1, "");
+    representation.addItemList ({ "Decibels", "Shape + loudness", "Linear" }, 1);
+    pitchTracking.addItemList ({ "Off", "Auto (3+ semitones)", "On" }, 1);
     title.setColour (juce::TextEditor::backgroundColourId, theme::background);
     title.setColour (juce::TextEditor::outlineColourId, theme::axis);
 
-    for (const auto* text : { "Name", "Note", "Duration", "Harmonics", "Floor", "Components" })
+    for (const auto* text : { "Name", "Note", "Duration", "Harmonics", "Floor", "Components", "Noise bands", "Levels as", "Pitch tracking" })
     {
         auto l = std::make_unique<juce::Label> (juce::String(), text);
         l->setFont (theme::font (12.0f));
@@ -71,10 +75,10 @@ TrainPanel::TrainPanel (PCASynthProcessor& p) : processor (p), trainer (p.getTra
     }
 
     controlsFromSettings();
-    for (auto* s : { &duration, &harmonics, &floorDb, &components })
+    for (auto* s : { &duration, &harmonics, &floorDb, &components, &noiseBands })
         s->onValueChange = [this] { settingsFromControls(); };
-    note.onChange = [this] { settingsFromControls(); };
-    normalize.onClick = trim.onClick = [this] { settingsFromControls(); };
+    note.onChange = representation.onChange = pitchTracking.onChange = [this] { settingsFromControls(); };
+    normalize.onClick = trim.onClick = partials.onClick = [this] { settingsFromControls(); };
     title.onTextChange = [this] { settingsFromControls(); };
 
     duration.setTooltip ("Seconds analysed from each sound's onset (longer sounds are cut, shorter ones fade to the floor)");
@@ -83,6 +87,12 @@ TrainPanel::TrainPanel (PCASynthProcessor& p) : processor (p), trainer (p.getTra
     components.setTooltip ("Principal components kept (at most one fewer than the number of sounds)");
     normalize.setTooltip ("Scale every sound so its loudest moment is at 0 dB");
     trim.setTooltip ("Line sounds up on their first sound (skip leading silence)");
+    noiseBands.setTooltip ("Bands of residual noise (breath, bow, hammer) kept alongside the harmonics. 0 = harmonics only");
+    partials.setTooltip ("Learn each partial's tuning (inharmonicity: pianos, bells), instead of exact harmonics");
+    representation.setTooltip ("Decibels: morphs blend spectral shapes. Shape + loudness: the loudness envelope is separate "
+                               "from the spectrum's shape. Linear: morphs behave more like crossfades");
+    pitchTracking.setTooltip ("With sounds at several pitches: learn how timbre changes with pitch, so each note gets the "
+                              "timbre of its register (Keytrack sets how much)");
     refresh();
 }
 
@@ -97,6 +107,10 @@ void TrainPanel::controlsFromSettings()
     components.setValue (s.components, juce::dontSendNotification);
     normalize.setToggleState (s.analysis.normalizeLoudness, juce::dontSendNotification);
     trim.setToggleState (s.analysis.trimOnset, juce::dontSendNotification);
+    noiseBands.setValue (s.analysis.noiseBands, juce::dontSendNotification);
+    partials.setToggleState (s.analysis.trackPartials, juce::dontSendNotification);
+    representation.setSelectedId (static_cast<int> (s.analysis.representation) + 1, juce::dontSendNotification);
+    pitchTracking.setSelectedId (static_cast<int> (s.analysis.pitchTracking) + 1, juce::dontSendNotification);
 }
 
 void TrainPanel::settingsFromControls()
@@ -112,6 +126,10 @@ void TrainPanel::settingsFromControls()
     s.components = static_cast<int> (components.getValue());
     s.analysis.normalizeLoudness = normalize.getToggleState();
     s.analysis.trimOnset = trim.getToggleState();
+    s.analysis.noiseBands = static_cast<int> (noiseBands.getValue());
+    s.analysis.trackPartials = partials.getToggleState();
+    s.analysis.representation = static_cast<pcs::Representation> (juce::jmax (0, representation.getSelectedId() - 1));
+    s.analysis.pitchTracking = static_cast<pcs::PitchTracking> (juce::jmax (0, pitchTracking.getSelectedId() - 1));
     trainer.setSettings (s);
 }
 
@@ -129,7 +147,8 @@ void TrainPanel::refresh()
     const bool running = trainer.isRunning();
     trainButton.setButtonText (running ? "Cancel" : "Train");
     for (auto* c : std::initializer_list<juce::Component*> { &addFiles, &addFolder, &removeButton, &clearButton, &title, &note,
-                                                            &duration, &harmonics, &floorDb, &components, &normalize, &trim })
+                                                            &duration, &harmonics, &floorDb, &components, &normalize, &trim,
+                                                            &noiseBands, &partials, &representation, &pitchTracking })
         c->setEnabled (! running);
     if (! running)
         controlsFromSettings();
@@ -222,8 +241,8 @@ void TrainPanel::resized()
     list.setBounds (r);
 
     // Right: settings, then Train.
-    auto row = [&right] { auto x = right.removeFromTop (28); right.removeFromTop (4); return x; };
-    juce::Component* controls[] = { &title, &note, &duration, &harmonics, &floorDb, &components };
+    auto row = [&right] { auto x = right.removeFromTop (24); right.removeFromTop (3); return x; };
+    juce::Component* controls[] = { &title, &note, &duration, &harmonics, &floorDb, &components, &noiseBands, &representation, &pitchTracking };
     for (size_t i = 0; i < labels.size(); ++i)
     {
         auto x = row();
@@ -232,10 +251,12 @@ void TrainPanel::resized()
     }
     auto toggles = row();
     toggles.removeFromLeft (88);
-    normalize.setBounds (toggles.removeFromLeft (toggles.getWidth() / 2));
-    trim.setBounds (toggles);
-    right.removeFromTop (8);
-    auto trainRow = right.removeFromTop (32);
+    const int third = toggles.getWidth() / 3;
+    normalize.setBounds (toggles.removeFromLeft (third));
+    trim.setBounds (toggles.removeFromLeft (third));
+    partials.setBounds (toggles);
+    right.removeFromTop (4);
+    auto trainRow = right.removeFromTop (30);
     trainButton.setBounds (trainRow.removeFromLeft (120));
     trainRow.removeFromLeft (8);
     progress.setBounds (trainRow.reduced (0, 6));

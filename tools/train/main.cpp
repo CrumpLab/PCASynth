@@ -25,6 +25,10 @@ void usage()
                  "  --frame-rate R    envelope frames per second (default 100)\n"
                  "  --components K    components kept (default 32, max 32)\n"
                  "  --floor-db D      level floor in dB (default -80)\n"
+                 "  --noise-bands N   residual noise bands (default 16; 0 = harmonics only)\n"
+                 "  --no-partials     treat partials as exact harmonics (no inharmonicity)\n"
+                 "  --representation R  db | shape | linear (default db)\n"
+                 "  --pitch-tracking P  auto | on | off (default auto: on when sounds span 3+ semitones)\n"
                  "  --no-normalize    keep each sound's own loudness\n"
                  "  --no-trim         don't align sounds on their onsets\n";
 }
@@ -55,6 +59,18 @@ int main (int argc, char** argv)
         else if (a == "--frame-rate") s.frameRate = std::stod (next());
         else if (a == "--components") components = std::stoi (next());
         else if (a == "--floor-db") s.floorDb = std::stod (next());
+        else if (a == "--noise-bands") s.noiseBands = std::stoi (next());
+        else if (a == "--no-partials") s.trackPartials = false;
+        else if (a == "--representation")
+        {
+            const auto r = next();
+            s.representation = r == "shape" ? pcs::Representation::ShapeLoudness : r == "linear" ? pcs::Representation::Linear : pcs::Representation::Decibels;
+        }
+        else if (a == "--pitch-tracking")
+        {
+            const auto t = next();
+            s.pitchTracking = t == "on" ? pcs::PitchTracking::On : t == "off" ? pcs::PitchTracking::Off : pcs::PitchTracking::Auto;
+        }
         else if (a == "--no-normalize") s.normalizeLoudness = false;
         else if (a == "--no-trim") s.trimOnset = false;
         else if (! a.empty() && a[0] == '-') { usage(); return 2; }
@@ -80,8 +96,11 @@ int main (int argc, char** argv)
         model.title = title.empty() ? pcs::tools::stem (outPath) : title;
         pcs::saveModel (model, outPath);
 
-        std::printf ("\n%d sounds, %d frames x %d harmonics, %d components\n", model.numSounds(), model.numFrames,
-                     model.numHarmonics, model.numComponents());
+        std::printf ("\n%d sounds, %d frames x %d harmonics + %d noise bands%s, %d components\n", model.numSounds(), model.numFrames,
+                     model.numHarmonics, model.numNoiseBands, model.hasPartials ? " + partial tuning" : "", model.numComponents());
+        if (model.pitchTracking)
+            std::printf ("pitch tracking: timbre follows pitch (training notes %.1f-%.1f, reference %.1f)\n", model.pitchMin,
+                         model.pitchMax, model.pitchRef);
         double cumulative = 0.0;
         for (int j = 0; j < model.numComponents(); ++j)
         {

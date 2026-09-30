@@ -14,7 +14,7 @@ add_executable(pcs_tests
     SynthTests.cpp
     TrainingSetTests.cpp
 )
-target_link_libraries(pcs_tests PRIVATE pcs_tools_common Catch2::Catch2WithMain)
+target_link_libraries(pcs_tests PRIVATE pcs_tools_common nlohmann_json::nlohmann_json Catch2::Catch2WithMain)
 
 list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
 include(Catch)

@@ -16,6 +16,10 @@ void EnvelopeView::refresh()
     auto& params = processor.getParameters();
     // The point as the synth hears it: exaggerated, truncated to Components
     // Used, plus any modulation (walk, LFOs, ...) while audio runs.
+    // Pitch: the most recent note (for models whose timbre follows pitch).
+    float delta = 0.0f;
+    if (model != nullptr && model->pitchTracking)
+        delta = model->pitchDelta (processor.getLastNote(), params.getRawParameterValue (pcsplugin::id::keytrack)->load());
     auto z = processor.getPoint();
     const float ex = params.getRawParameterValue (pcsplugin::id::exaggerate)->load();
     const int used = juce::roundToInt (params.getRawParameterValue (pcsplugin::id::components)->load());
@@ -28,9 +32,10 @@ void EnvelopeView::refresh()
         if (processor.getNewestVoicePoint (newest)) // the most recent note (its own MPE/walk point)
             z = newest;
     }
-    if (dirty || z != shown)
+    if (dirty || z != shown || std::abs (delta - pitchDelta) > 1e-4f)
     {
         shown = z;
+        pitchDelta = delta;
         rebuild();
         dirty = false;
         repaint();
@@ -53,27 +58,43 @@ void EnvelopeView::rebuild()
         image = {};
         return;
     }
-    const int frames = model->numFrames, harmonics = model->numHarmonics;
+    const int frames = model->numFrames, harmonics = model->numHarmonics, bands = model->numNoiseBands;
     db.resize (static_cast<size_t> (frames * harmonics));
+    noise.resize (static_cast<size_t> (frames * bands));
     for (int t = 0; t < frames; ++t)
-        model->decodeFrame (t, shown.data(), pcs::kMaxComponents, db.data() + static_cast<size_t> (t * harmonics));
+    {
+        model->decodeFrame (t, shown.data(), pcs::kMaxComponents, db.data() + static_cast<size_t> (t * harmonics), pitchDelta);
+        if (bands > 0)
+            model->decodeNoiseFrame (t, shown.data(), pcs::kMaxComponents, noise.data() + static_cast<size_t> (t * bands), pitchDelta);
+    }
 
-    // Colour: display floor .. 0 dB (levels are normalised to the loudest frame of each training sound).
-    image = juce::Image (juce::Image::RGB, frames, harmonics, false);
+    // Rows, top to bottom: noise bands (2 rows each, highest band first), a gap,
+    // then harmonics (highest first). Colour: display floor .. 0 dB.
+    const int noiseRows = bands * 2, gap = bands > 0 ? 2 : 0;
+    image = juce::Image (juce::Image::RGB, frames, harmonics + gap + noiseRows, false);
+    image.clear (image.getBounds(), theme::panel);
     const float floorDb = displayFloor();
     for (int t = 0; t < frames; ++t)
+    {
         for (int h = 0; h < harmonics; ++h)
         {
             const float level = (db[static_cast<size_t> (t * harmonics + h)] - floorDb) / -floorDb;
-            image.setPixelAt (t, harmonics - 1 - h, theme::levelColour (level));
+            image.setPixelAt (t, noiseRows + gap + harmonics - 1 - h, theme::levelColour (level));
         }
+        for (int b = 0; b < bands; ++b)
+        {
+            const auto c = theme::levelColour ((noise[static_cast<size_t> (t * bands + b)] - floorDb) / -floorDb);
+            image.setPixelAt (t, 2 * (bands - 1 - b), c);
+            image.setPixelAt (t, 2 * (bands - 1 - b) + 1, c);
+        }
+    }
 }
 
 juce::Rectangle<float> EnvelopeView::plotArea() const
 {
     auto r = getLocalBounds().toFloat().reduced (10.0f);
     r.removeFromTop (22.0f);
-    r.removeFromLeft (26.0f);
+    r.removeFromLeft (36.0f);
     r.removeFromBottom (16.0f);
     r.removeFromRight (44.0f); // legend
     return r;
@@ -92,11 +113,15 @@ void EnvelopeView::paint (juce::Graphics& g)
     g.setFont (theme::font (10.0f));
     g.setColour (theme::faint);
     const int harmonics = model->numHarmonics;
+    const int rows = image.getHeight();
+    const float rowH = a.getHeight() / static_cast<float> (rows);
+    if (model->numNoiseBands > 0)
+        g.drawText ("noise", juce::Rectangle<float> (a.getX() - 34.0f, a.getY(), 32.0f, model->numNoiseBands * 2 * rowH), juce::Justification::centredRight);
     for (int h : { 1, 8, 16, 32, 64, 128 })
         if (h <= harmonics)
         {
-            const float y = a.getBottom() - (h - 0.5f) / harmonics * a.getHeight();
-            g.drawText (juce::String (h), juce::Rectangle<float> (a.getX() - 26.0f, y - 6.0f, 22.0f, 12.0f), juce::Justification::centredRight);
+            const float y = a.getBottom() - (h - 0.5f) * rowH;
+            g.drawText (juce::String (h), juce::Rectangle<float> (a.getX() - 34.0f, y - 6.0f, 30.0f, 12.0f), juce::Justification::centredRight);
         }
     const double seconds = model->durationSeconds();
     for (int s = 0; s <= static_cast<int> (seconds); ++s)

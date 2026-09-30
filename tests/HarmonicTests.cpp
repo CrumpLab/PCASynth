@@ -66,6 +66,8 @@ TEST_CASE ("Onsets are aligned and loudness normalised", "[harmonic]")
         double e = 0.0;
         for (int h = 0; h < late.numHarmonics; ++h)
             e += std::pow (10.0, late.at (t, h) / 10.0);
+        for (int b = 0; b < late.numNoiseBands; ++b) // noise counts too (2 × RMS², like A²)
+            e += 2.0 * std::pow (10.0, late.noiseAt (t, b) / 10.0);
         maxEnergy = std::max (maxEnergy, e);
     }
     CHECK (10.0 * std::log10 (maxEnergy) == Approx (0.0).margin (0.01));
@@ -120,4 +122,82 @@ TEST_CASE ("Auto pitch analyses each sound at its own pitch", "[harmonic][pitch]
     // Same spectrum shape at both pitches.
     for (int h = 0; h < 8; ++h)
         CHECK (low.at (50, h) == Approx (high.at (50, h)).margin (0.5));
+}
+
+namespace {
+// A tone whose partials may be stretched (f_h = h f0 sqrt(1 + B h^2)), plus white noise.
+AudioBuffer stretchedTone (double f0, double seconds, double inharmonicity, int partials, double noiseRms, uint32_t seed = 1)
+{
+    AudioBuffer a;
+    a.sampleRate = 48000.0;
+    a.resize (1, static_cast<int> (seconds * a.sampleRate));
+    for (int h = 1; h <= partials; ++h)
+    {
+        const double f = h * f0 * std::sqrt (1.0 + inharmonicity * h * h);
+        if (f > 0.45 * a.sampleRate)
+            break;
+        for (size_t i = 0; i < a.channels[0].size(); ++i)
+            a.channels[0][i] += static_cast<float> (0.3 / h * std::sin (6.28318530717958647692 * f * static_cast<double> (i) / a.sampleRate + h));
+    }
+    for (auto& x : a.channels[0]) // uniform noise with the given RMS
+    {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        x += static_cast<float> (noiseRms * std::sqrt (3.0) * (2.0 * (seed / 4294967296.0) - 1.0));
+    }
+    return a;
+}
+} // namespace
+
+TEST_CASE ("Residual noise is measured per band at the right level", "[harmonic][noise]")
+{
+    AnalysisSettings s = raw();
+    s.harmonics = 20;
+    s.noiseBands = 16;
+    const double f0 = midiToHz (57), sigma = 0.01;
+    const auto noisy = analyseHarmonics (stretchedTone (f0, 1.2, 0.0, 12, sigma), s);
+    for (int b = 0; b < s.noiseBands; ++b)
+    {
+        const double lo = noiseBandEdge (b, s.noiseBands) * f0, hi = std::min (noiseBandEdge (b + 1, s.noiseBands) * f0, 0.48 * 48000.0);
+        if (lo >= 0.48 * 48000.0)
+            continue;
+        const double expected = test::db (sigma * std::sqrt ((hi - lo) / 24000.0));
+        double mean = 0.0;
+        for (int t = 20; t < 80; ++t)
+            mean += noisy.noiseAt (t, b) / 60.0;
+        INFO ("band " << b << " (" << lo << "-" << hi << " Hz)");
+        CHECK (mean == Approx (expected).margin (2.0));
+    }
+    // The harmonics are still measured correctly under the noise.
+    CHECK (noisy.at (50, 0) == Approx (test::db (0.3)).margin (0.3));
+
+    // A clean tone: nothing that deserves the name noise.
+    const auto clean = analyseHarmonics (stretchedTone (f0, 1.2, 0.0, 12, 0.0), s);
+    for (int b = 0; b < s.noiseBands; ++b)
+        CHECK (clean.noiseAt (50, b) < -75.0f);
+}
+
+TEST_CASE ("Stretched partials are tracked, measured and reported in cents", "[harmonic][partials]")
+{
+    AnalysisSettings s = raw();
+    s.harmonics = 40;
+    s.noiseBands = 0;
+    s.midiNote = 48;
+    const double f0 = midiToHz (48), B = 0.0004;
+    const auto sound = analyseHarmonics (stretchedTone (f0, 1.5, B, 40, 0.0), s);
+    REQUIRE (sound.partialCents.size() == 40);
+    CHECK (sound.f0 == Approx (f0 * std::sqrt (1.0 + B)).epsilon (0.001));
+    for (int h = 1; h <= 30; ++h)
+    {
+        INFO ("partial " << h);
+        const double trueCents = 1200.0 * std::log2 (std::sqrt (1.0 + B * h * h) / std::sqrt (1.0 + B));
+        CHECK (sound.partialCents[static_cast<size_t> (h - 1)] == Approx (trueCents).margin (3.0));
+        CHECK (sound.at (50, h - 1) == Approx (test::db (0.3 / h)).margin (0.5));
+    }
+
+    // Exact harmonics report ~0 cents.
+    const auto exact = analyseHarmonics (stretchedTone (f0, 1.5, 0.0, 40, 0.0), s);
+    for (int h = 0; h < 30; ++h)
+        CHECK (std::abs (exact.partialCents[static_cast<size_t> (h)]) < 1.0f);
 }

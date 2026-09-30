@@ -55,6 +55,8 @@ struct SynthParams
     int polyphony = 16;
     ModParams mod;                          // random walk, LFOs, expression (Stage 5)
     MpeParams mpe;                          // per-note expression (Stage 6)
+    float noiseDb = 0.0f;                   // residual noise level vs the model (dB); <= -60 mutes it (Stage 7)
+    float keytrack = 1.0f;                  // how much timbre follows pitch (models with pitch tracking)
     double bpm = 120.0;                     // for synced walk steps and LFOs
 };
 
@@ -78,6 +80,7 @@ public:
     static constexpr int kMaxVoices = 32;
     static constexpr int kMaxHarmonics = 128;
     static constexpr int kSubBlock = 32;
+    static constexpr int kMaxNoiseBands = 64;
 
     // A model plus the per-model buffers the synth needs, built off the
     // audio thread so a model can be swapped in without allocating.
@@ -85,6 +88,7 @@ public:
     {
         std::shared_ptr<const Model> model;
         std::vector<float> cache;       // numFrames × numHarmonics, linear amplitude
+        std::vector<float> noiseCache;  // numFrames × numNoiseBands, linear RMS
         std::vector<uint32_t> stamps;   // per frame: point the cache was decoded for
         std::vector<Point> soundZ;      // training sounds' coordinates (for walk tours)
         Point relSd {};                 // each component's SD relative to PC1
@@ -157,6 +161,12 @@ private:
         bool follows = false; // still following its member channel (until key-up)
         float noteBend = 0.0f, pressure = 0.0f, slide = 0.5f; // latest raw values
         float pressureSmooth = 0.0f, slideSmooth = 0.5f;
+        // Stage 7: partial frequencies, timbre following pitch, noise.
+        std::array<float, kMaxHarmonics> cents {}, hf {}; // partial offsets applied; partial frequencies (Hz)
+        float pitchDelta = 0.0f;
+        int numNoiseBands = 0;
+        std::array<float, kMaxNoiseBands> nb0 {}, na1 {}, na2 {}, nz1 {}, nz2 {}, nGain {}, nNorm {}, nFc {};
+        std::array<uint32_t, kMaxNoiseBands> noiseRng {}; // an independent source per band (their powers add)
     };
 
     void handle (const MidiEvent& e) noexcept;
@@ -166,8 +176,10 @@ private:
     void setVoiceFrequency (Voice& v) noexcept;
     void render (float* out, int n) noexcept;
     void renderVoice (Voice& v, float* out, int n) noexcept;
-    const float* frame (int t) noexcept; // linear amplitudes at the smoothed point, cached
-    void frameAt (const Voice& v, double pos, float* dst) noexcept;
+    int frame (int t) noexcept; // decodes frame t at the heard point into the caches (once per point); returns t clamped
+    // Linear harmonic amplitudes (and noise band RMS, if `noise`) at envelope position `pos`.
+    void frameAt (const Voice& v, double pos, float* harmonics, float* noise) noexcept;
+    bool keytracking() const noexcept;
     void modulate (int n) noexcept;
 
     double sr = 48000.0;
@@ -186,7 +198,9 @@ private:
     WalkMode walkMode = WalkMode::Drift;
     uint32_t spreadRng = 12345;
     Point heard {};
-    std::array<float, kMaxHarmonics> scratchC {};
+    std::array<float, kMaxHarmonics> scratchC {}, heardCents {};
+    uint32_t centsStamp = 0;
+    std::array<float, kMaxNoiseBands> scratchN {}, scratchN2 {}, scratchN3 {}, scratchN4 {}, cacheScratchN {};
 
     // MPE: each channel's latest per-note values (index 1..16).
     std::array<float, 17> chBend {}, chPressure {}, chSlide {};

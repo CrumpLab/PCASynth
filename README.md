@@ -13,14 +13,15 @@ bank of sine oscillators, so any pitch plays the learned timbre. See
 
 By [Matthew Crump](https://crumplab.com), Brooklyn College of CUNY.
 
-**Status: Stage 6 (version 0.6.0).** A playable VST3 (plus a Standalone
+**Status: Stage 7 (version 0.7.0).** A playable VST3 (plus a Standalone
 app) with its own UI:
 - a map of the sound space, a four-corner morph pad, a live view of the
-  harmonics, component sliders;
+  sound;
 - training on your own audio;
-- random walks, LFOs and expression routing;
-- MPE: per-note bend, pressure and slide for controllers such as the
-  Expressive E Osmose.
+- random walks, LFOs and expression;
+- MPE for controllers such as the Osmose;
+- a richer sound model: breath and bow noise, inharmonic (piano-like)
+  partials, and timbre that follows pitch when trained on several notes.
 
 It has not yet been played in a DAW or on an Osmose.
 
@@ -63,6 +64,9 @@ instrument. The zip also has a Standalone app for trying it without a DAW.
   - **Scan** holds one moment of the sound (automate Scan).
 - **Exaggerate** scales the whole point (0 = the average sound, 2 = twice as
   far out). **Components** keeps only the first K.
+- **Noise** sets the level of the learned breath and bow noise ("off" = pure
+  harmonics). **Keytrack** sets how much timbre follows pitch, for spaces
+  trained on several notes.
 - **Jump to** / **Centre** go to a training sound or the average.
   **Export WAV…** renders the last note you played at the current point.
 - **Load Model…** or drop a `.pcsm` file on the window to play a saved
@@ -132,6 +136,18 @@ With MPE off, the plugin behaves as an ordinary synth.
 3. Click **Train**. Analysis runs in the background. The list shows each
    sound's detected pitch, and flags any file that failed.
 4. The new space replaces the current one, starting at its centre.
+
+**Richer training options:**
+- **Noise bands** keep breath, bow and hammer noise; 0 = harmonics only.
+- **Partial tuning** learns stretched, inharmonic partials (pianos, bells).
+- **Levels as** chooses how levels are represented:
+  - Decibels (default): morphs blend spectral shapes.
+  - Shape + loudness: the loudness envelope is separate from the spectrum's
+    shape.
+  - Linear: morphs behave more like crossfades.
+- **Pitch tracking:** give it several notes per instrument (e.g. C3, C4, C5)
+  and it learns how timbre changes with pitch. Each note then gets its
+  register's timbre; the **Keytrack** knob sets how much.
 
 Removing sounds or changing Components retrains quickly (analysed sounds
 are cached). Your project remembers the file list and settings, and

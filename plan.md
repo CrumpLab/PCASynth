@@ -6,10 +6,11 @@ of WAVs of different instruments all playing the same note. It learns the
 space those sounds span, and you play any point in that space: the training
 sounds themselves, morphs between them, or places no instrument has been.
 
-> **Status:** Stages 1–6 are built: the engine, the offline tools, and a
+> **Status:** Stages 1–7 are built: the engine, the offline tools, and a
 > playable VST3 with its own UI. It trains new spaces from your audio,
-> moves through them (random walks, LFOs, expression), and takes MPE
-> (per-note bend, pressure and slide, aimed at the Osmose). Decisions are recorded in §6. Licence: open source (AGPLv3, following JUCE's open-source
+> moves through them (random walks, LFOs, expression), takes MPE (aimed at
+> the Osmose), and models noise, inharmonic partials and pitch-dependent
+> timbre. Stage 8 (polish and release) remains. Decisions are recorded in §6. Licence: open source (AGPLv3, following JUCE's open-source
 > licence).
 
 ---
@@ -423,14 +424,103 @@ slide became per-note moves through the space.
 amounts); whether it sends the MPE Configuration Message (if not, switch MPE
 on by hand); and its pitch-bend range setting (match Note Bend).
 
-### Stage 7: Richer model
-- **Residual noise:** band energies of what the harmonics don't explain, as
-  extra dimensions in the same PCA. Resynthesised as filtered noise.
-- **Partial frequency ratios** (inharmonicity) as extra dimensions.
-- **Multi-note training:** several notes per instrument, with pitch as a
-  model input (key-mapped spaces, or pitch as a regressor).
-- Alternative representations (linear amplitude, per-frame loudness
-  separated from spectral shape) to compare how the spaces sound.
+### Stage 7: Richer model — done, awaiting a listen
+
+Each sound's vector now has **sections**:
+
+| Section | Values | Weight in the PCA |
+|---|---|---|
+| Harmonics | frames × harmonics, in the chosen representation | 1 |
+| Loudness | frames (Shape + loudness only) | √(harmonics + bands): like shifting every band |
+| Noise | frames × 16 bands | 1 |
+| Partials | harmonics: cents from exact | 0.1·√frames: 10 cents ≈ 1 dB held all note |
+
+File format version 2. Version 1 files load unchanged (harmonics in dB
+only).
+
+**Residual noise** (breath, bow, hammer):
+- **Where it is measured:** 16 bands at fixed ratios of f0 (0.5–96 × f0), so
+  they move with the played note like the harmonics. The noise is measured
+  with a 16-period window (twice the harmonic window) in "quiet" bins at
+  least 0.32 of the local spacing from every partial, where the partials'
+  main lobes have ended.
+- **How the estimate is made robust:**
+  - The median / ln 2 estimates the noise level, bins above 3× that are
+    dropped (partials smeared by vibrato), and the rest are averaged with the
+    exact correction for the trim.
+  - Bands inside the fundamental's main lobe take their neighbours' noise
+    density.
+  - Pure tones read at the floor.
+  - White noise is measured within about 1 dB per band.
+- **Resynthesis:** per voice, an RBJ band-pass filter per band, each on its
+  own white-noise source, so the band powers add rather than correlate.
+  Each filter is normalised by its exact noise gain (α / (1 + α)); the analog
+  π/2 × bandwidth rule was up to 5.7 dB off near Nyquist. A noise-only sound
+  renders back within 2.5 dB per band, and total power within 0.02 dB.
+- **Level:** the **Noise** knob (dB, "off" at −60). Decoded noise is clamped
+  at the training set's loudest band + 6 dB. The noise range across a set is
+  wide (the floor for pure tones up to the breathy sounds), so walks would
+  otherwise extrapolate it far past anything real.
+
+**Partial tuning** (inharmonicity):
+- **Tracking:** partials are tracked one after another on the long-term
+  spectrum (predicted from the last spacing, accepted only as a clear peak).
+  The fundamental is partial 1 itself, since the harmonic-sum estimate is
+  pulled sharp by stretched partials.
+- **Accuracy:** a stretched tone (B = 0.0004, C3) is measured within 3 cents
+  and 0.5 dB up to partial 30. The old fixed-harmonic search lost them past
+  about partial 10.
+- **Playback:** oscillators run at `h × f × 2^(cents/1200)`, re-tuned only
+  when the decoded cents change; rendered partials are within 3 cents.
+
+**Timbre follows pitch** (multi-note training):
+- **When:** pitch tracking is Auto (on when the set spans 3+ semitones), On
+  or Off.
+- **How:** every dimension is regressed on pitch (least squares) and that
+  direction is taken out before the PCA. Each note adds it back:
+
+  `(note − reference, clamped to the training range ± an octave) × Keytrack`
+- **Result:** a note renders its predicted timbre within 0.02 dB.
+- **Honest measure:** for an unseen pitch of a training instrument, the
+  error drops from 3.3 to 2.9 dB. One shared direction captures the common
+  trend (spectral features fixed in Hz sliding across harmonic numbers);
+  each instrument's own pitch behaviour stays in the PCA.
+
+**Representations** (a training option):
+- **Decibels** (the default).
+- **Shape + loudness:** the per-frame loudness is its own section.
+- **Linear:** amplitudes, so morphs behave more like crossfades.
+
+All three reproduce their training sounds.
+
+**Synth and UI:**
+- Voices without their own point share the frame caches (harmonics and
+  noise). Keytrack voices decode their own. 16 voices with noise use about
+  9 % of a core.
+- The Train panel gains Noise bands, Partial tuning, Levels as, and Pitch
+  tracking.
+- The envelope view shows the noise bands above the harmonics.
+- The model summary lists what a space contains.
+- New knobs: Noise and Keytrack.
+
+**Bugs found on the way:**
+- A scratch buffer shared by the frame cache and the loop crossfade turned
+  noise gains into dB values, and output blew up to about 250 × full scale.
+- After a model swap, the point-version counter restarted at 1, so the
+  partial-tuning cache could match an old model's version and keep its
+  tuning. The counter now only increases, and a regression test swaps
+  models and compares with a fresh synth.
+
+**Tests:** noise level per band, pure tones stay clean, stretched partials,
+round trips for every representation, v1 files, pitch tracking,
+noise-render calibration, partial rendering, keytrack, model swaps, and
+the plugin's options and state.
+
+**Listening examples 15–18:**
+- 15: noise (original | harmonics only | with noise | +9 dB).
+- 16: partials (original | exact harmonics | stretched).
+- 17: keytrack off/on over three octaves.
+- 18: one morph in three representations.
 
 ### Stage 8: Polish and release
 - Presets (model + point + settings), manual, CPU optimisation (SIMD
