@@ -8,7 +8,8 @@ sounds themselves, morphs between them, or places no instrument has been.
 
 > **Status:** Stages 1–5 are built: the engine, the offline tools, and a
 > playable VST3 with its own UI, which trains new spaces from your audio
-> and moves through them (random walks, LFOs, expression). Decisions are recorded in §6. Licence: open source (AGPLv3, following JUCE's open-source
+> and moves through them (random walks, LFOs, expression). Stage 6 (MPE
+> for the Osmose) is planned. Decisions are recorded in §6. Licence: open source (AGPLv3, following JUCE's open-source
 > licence).
 
 ---
@@ -361,7 +362,49 @@ restarts it.
 **Listening examples:** 09–14 (drift, jumps, tour, neighbour tour, per-voice
 walk, LFOs). `pcs-render` gained `--walk` and related options.
 
-### Stage 6: Richer model
+### Stage 6: MPE (for the Osmose)
+Per-note expression from MPE controllers, aimed at the Expressive E Osmose.
+Each voice can already have its own point in the space (Stage 5), so MPE
+dimensions become per-note moves through the space.
+
+**Why it's needed:** today, pitch bend is one bend for the whole
+instrument, pressure is one global value, and slide (CC74) is ignored. In
+MPE each note sends these on its own channel, so bending or pressing one
+key would move every sounding note.
+
+**Plan:**
+- **MPE input:**
+  - Notes tracked by channel, using JUCE's MPE support (`MPEInstrument`,
+    zone layout: lower zone, 15 member channels by default).
+  - The plugin declares itself MPE-capable to the host.
+  - Settings: MPE on or off, zone, and master and per-note bend ranges.
+    The per-note range defaults to 48 semitones, the Osmose default; set it
+    to match the Osmose's setting.
+- **Per-note pitch bend:** each voice bends on its own. Master-channel bend
+  still bends everything.
+- **Per-note pressure** (channel pressure on each note's channel, or poly
+  aftertouch) routed to a destination for that note only: PC1–PC16 or
+  Toward Sound, with an amount and a **pressure curve** (response shaping
+  for the Osmose's press depth) plus light smoothing.
+- **Per-note slide** (CC74) as a second routable per-note direction, with
+  its own amount. It is bipolar around its centre or unipolar from 0, as a
+  setting.
+- **Strike velocity** uses the existing velocity routing. Release velocity
+  could set per-note release time (optional).
+- **Non-MPE controllers** keep working as now: with MPE off, pressure and
+  CC74 stay global.
+- **Display:** the sound map shows each note's point moving as you press
+  and slide; the envelope view follows the most recent note.
+- **Tests:** simulated MPE streams.
+  - Two notes on separate channels bend and press independently.
+  - Pressure moves only its own note's point.
+  - Master bend moves both.
+  - Non-MPE input is unchanged.
+  - Voice stealing and channel reuse.
+- **Not testable here:** the feel on a real Osmose (pressure curve, ranges).
+  It needs a play-through, and the defaults will be tuned from that.
+
+### Stage 7: Richer model
 - **Residual noise:** band energies of what the harmonics don't explain, as
   extra dimensions in the same PCA. Resynthesised as filtered noise.
 - **Partial frequency ratios** (inharmonicity) as extra dimensions.
@@ -370,7 +413,7 @@ walk, LFOs). `pcs-render` gained `--walk` and related options.
 - Alternative representations (linear amplitude, per-frame loudness
   separated from spectral shape) to compare how the spaces sound.
 
-### Stage 7: Polish and release
+### Stage 8: Polish and release
 - Presets (model + point + settings), manual, CPU optimisation (SIMD
   oscillators, skipping silent harmonics), signed and notarised installer.
 
@@ -383,3 +426,4 @@ walk, LFOs). `pcs-render` gained `--walk` and related options.
 | 3 | Structure | Follows MinervaSpaceEcho: framework-free engine, offline tools, Catch2, CI |
 | 4 | First training data | **Synthetic**, generated deterministically (real sample libraries are blocked from the dev container; your own WAVs work any time) |
 | 5 | Licence | **Open source, AGPLv3** (assumed, as for MinervaSpaceEcho) |
+| 6 | Expressive controller | **MPE, for the Expressive E Osmose** (Stage 6): per-note bend, pressure and slide as per-note moves through the space |
