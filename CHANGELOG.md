@@ -17,8 +17,15 @@
 - With MPE off, MIDI behaves exactly as before.
 
 ### Fixed
-- Random-walk step timing could drift by one tick on Apple Silicon, which
-  failed the neighbour-tour test in the macOS CI.
+- **Neighbour Tour now goes to sounds that really are similar.** It measured
+  distance in z units, where every component counts equally. With all
+  components kept, whitening makes the training sounds exactly
+  equidistant (a regular simplex), so "the three nearest" were ties, broken
+  by rounding (differently on Apple Silicon, which failed the macOS CI).
+  Distances are now measured in the model's own units (each component
+  weighted by its SD), so the main components decide what is near.
+- Random-walk step timing is snapped to whole steps so it can't slip a tick
+  through rounding.
 
 ## [0.5.0] - 2026-09-30
 

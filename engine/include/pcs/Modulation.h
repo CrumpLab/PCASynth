@@ -44,6 +44,12 @@ struct WalkParams
     bool freeze = false;        // hold where it is
 };
 
+// Squared distance between two points in the model's own units (z scaled by
+// each component's SD relative to PC1): what Neighbour Tour calls "near".
+// In plain z units every component, even the noise-level ones, counts as much
+// as PC1, and all sounds end up nearly equidistant.
+float soundDistance (const Point& a, const Point& b, const Point& relSd) noexcept;
+
 // One walker. Produces an offset from home (z units) that changes smoothly.
 class RandomWalk
 {

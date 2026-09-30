@@ -140,18 +140,16 @@ TEST_CASE ("Tours arrive at training sounds; neighbour tours step to near ones",
         w.reset (9);
         Point home {};
         home[0] = 0.5f;
-        auto dist = [&] (int x, int y) {
-            float d = 0.0f;
-            for (int j = 0; j < kMaxComponents; ++j)
-                d += std::pow (sounds[static_cast<size_t> (x)][static_cast<size_t> (j)] - sounds[static_cast<size_t> (y)][static_cast<size_t> (j)], 2.0f);
-            return d;
-        };
+        Point relSd {};
+        for (int j = 0; j < m->numComponents(); ++j)
+            relSd[static_cast<size_t> (j)] = static_cast<float> (m->sd (j) / m->sd (0));
+        auto dist = [&] (int x, int y) { return soundDistance (sounds[static_cast<size_t> (x)], sounds[static_cast<size_t> (y)], relSd); };
         std::vector<int> path; // every sound the tour heads to, in order
         for (int step = 0; step < 12; ++step)
         {
             for (int i = 0; i < 100; ++i) // one 1 s step
             {
-                w.advance (0.01, p, 1.0, home, sounds, ones());
+                w.advance (0.01, p, 1.0, home, sounds, relSd);
                 if (path.empty() || w.currentSound() != path.back())
                     path.push_back (w.currentSound());
             }
@@ -173,8 +171,9 @@ TEST_CASE ("Tours arrive at training sounds; neighbour tours step to near ones",
                 const int from = path[k - 1], to = path[k], before = k >= 2 ? path[k - 2] : -1;
                 int closer = 0;
                 for (int i = 0; i < m->numSounds(); ++i)
-                    if (i != from && i != before && dist (i, from) < dist (to, from))
+                    if (i != from && i != before && dist (i, from) < dist (to, from) * (1.0f - 1e-4f)) // ties don't count
                         ++closer;
+                INFO ("step " << k << ": " << from << " -> " << to);
                 CHECK (closer <= 2);
             }
         }

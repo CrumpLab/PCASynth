@@ -22,6 +22,17 @@ float smoothstep (float t) noexcept { return t * t * (3.0f - 2.0f * t); }
 
 // ---- RandomWalk ---------------------------------------------------------------------
 
+float soundDistance (const Point& a, const Point& b, const Point& relSd) noexcept
+{
+    double d = 0.0;
+    for (size_t j = 0; j < a.size(); ++j)
+    {
+        const double diff = static_cast<double> (a[j] - b[j]) * relSd[j];
+        d += diff * diff;
+    }
+    return static_cast<float> (d);
+}
+
 void RandomWalk::reset (uint32_t seed) noexcept
 {
     rng = seed * 2654435761u + 0x9e3779b9u;
@@ -56,19 +67,15 @@ void RandomWalk::newTarget (const WalkParams& p, const Point& home, const std::v
         }
         else
         {
-            // One of the three nearest sounds (not the one we just left).
+            // One of the three nearest sounds (not the one we just left), by
+            // distance in the model's own units, so the main components dominate.
             std::array<std::pair<float, int>, 3> best;
             best.fill ({ 1e30f, -1 });
             for (int i = 0; i < n; ++i)
             {
                 if (i == sound || (i == previous && n > 2))
                     continue;
-                float d = 0.0f;
-                for (int j = 0; j < kMaxComponents; ++j)
-                {
-                    const float diff = sounds[static_cast<size_t> (i)][static_cast<size_t> (j)] - sounds[static_cast<size_t> (sound)][static_cast<size_t> (j)];
-                    d += diff * diff;
-                }
+                const float d = soundDistance (sounds[static_cast<size_t> (i)], sounds[static_cast<size_t> (sound)], relSd);
                 if (d < best.back().first)
                 {
                     best.back() = { d, i };

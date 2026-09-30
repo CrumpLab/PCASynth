@@ -308,7 +308,7 @@ too. It is added after the point's smoothing:
 | Mode: **Drift** | Brownian motion (Ornstein–Uhlenbeck). With Tether 100 % its spread is Amount (SD); lower tethers wander further, bounded at ±4 SD |
 | Mode: **Jumps** | A new random point (normal, SD = Amount) every step; **Glide** 0 = hard jumps … 100 % = continuous gliding |
 | Mode: **Tour** | Travels from training sound to training sound in random order (Amount 1 = arrive exactly; 0.5 = halfway from home) |
-| Mode: **Neighbour Tour** | Each step goes to one of the three most similar sounds (no immediate backtracking), so it drifts through families |
+| Mode: **Neighbour Tour** | Each step goes to one of the three most similar sounds (no immediate backtracking), so it drifts through families. "Similar" is distance in the model's own units (components weighted by their SD). In z units every whitened component counts equally and the training sounds are exactly equidistant |
 | Rate / **Sync** + Step | Steps per second, or tempo-synced (1/16 note to 16 bars, host tempo) |
 | Components, **Focus** | Drift and Jumps move PC1..PCn. Focus: Equal (every component by Amount) or Main (in proportion to its variance) |
 | **Per Voice** | 0 = one shared walk; 100 % = every note wanders on its own (its walk starts at home) |
