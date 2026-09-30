@@ -58,6 +58,15 @@ struct WaveModel final : Space
     // weights that make the point `z` (numSounds() values, summing to 1).
     std::vector<double> mixWeights (const float* z, int numZ) const;
 
+    // The point as amounts of each training sound mixed in from the centre:
+    // z = Σ_i a_i · z_i, where z_i is sound i's point. All 0 is the centre; 1
+    // on sound k alone is sound k. Amounts that differ by the same constant on
+    // every sound make the same point (the centred sounds sum to zero), so
+    // mixAmounts returns the smallest such amounts, shifted so that most are
+    // 0: exactly 1 on a training sound's own point, all 0 at the centre.
+    std::vector<float> pointFromAmounts (const double* amounts, int n) const; // numComponents() values
+    std::vector<double> mixAmounts (const float* z, int numZ) const;          // numSounds() values
+
     // Loudness at `z` (dB): the energy of its first levelSeconds, from a
     // quadratic form precomputed by finalize(), so it costs O(K²).
     static constexpr double kLevelSeconds = 0.5;

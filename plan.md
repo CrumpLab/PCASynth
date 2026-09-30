@@ -718,6 +718,15 @@ hear both, blended, and every training sound is exact.
   (24 kHz, 2 s, 24 components, 4.8 MB, built at build time), 13 presets,
   headless checks and snapshots. Each plugin refuses the other's spaces.
 - CI and packaging for both; one version number.
+- **The Mix tab is a mixer** (asked for after a first try, where it was only
+  a readout): the point is the centre plus amounts of the training sounds,
+  z = Σ a_i z_i, set by dragging each sound's bar. Amounts that differ by a
+  constant make the same point (the centred sounds sum to zero), so when
+  the point moves another way they are read back as the smallest amounts,
+  shifted to a median of 0: exactly one sound after a jump, all 0 at the
+  centre. The heard point is shown as your amounts plus the amounts of its
+  offset, so the two agree unless something moves it. Amounts are saved in
+  the state.
 
 **Measured on the 60 synthetic sounds:**
 - Aligned vs original: 0.59 dB (PCASynth's analysis: 1.39).

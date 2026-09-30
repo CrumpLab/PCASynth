@@ -324,13 +324,13 @@ std::vector<float> WaveModel::decode (const float* z, int numZ) const
     return out;
 }
 
-std::vector<double> WaveModel::mixWeights (const float* z, int numZ) const
+std::vector<double> WaveModel::mixAmounts (const float* z, int numZ) const
 {
     // The point is mean + Σ z_j sd_j c_j, and each component is a combination
     // of the centred training rows: c_j = Σ_i s_ij (x_i - mean) / Σ_i s_ij².
-    const int n = numSounds();
+    const int n = numSounds(), k = std::min (numZ, numComponents());
     std::vector<double> v (static_cast<size_t> (n), 0.0);
-    for (int j = 0; j < std::min (numZ, numComponents()); ++j)
+    for (int j = 0; j < k; ++j)
     {
         double ss = 0.0;
         for (int i = 0; i < n; ++i)
@@ -340,12 +340,55 @@ std::vector<double> WaveModel::mixWeights (const float* z, int numZ) const
         for (int i = 0; i < n; ++i)
             v[static_cast<size_t> (i)] += z[j] * sd (j) * pca.score (i, j) / ss;
     }
+    if (n == 0)
+        return v;
+
+    // A training sound's own point reads as that sound alone.
+    for (int s = 0; s < n; ++s)
+    {
+        bool same = true;
+        for (int j = 0; j < numComponents() && same; ++j)
+            same = std::abs ((j < numZ ? z[j] : 0.0f) - static_cast<float> (pca.score (s, j) / sd (j))) < 1e-4f;
+        for (int j = numComponents(); j < numZ && same; ++j)
+            same = std::abs (z[j]) < 1e-4f;
+        if (same)
+        {
+            std::fill (v.begin(), v.end(), 0.0);
+            v[static_cast<size_t> (s)] = 1.0;
+            return v;
+        }
+    }
+    // Otherwise the equivalent amounts with a median of 0 (most sounds unused).
+    auto sorted = v;
+    std::nth_element (sorted.begin(), sorted.begin() + n / 2, sorted.end());
+    const double shift = sorted[static_cast<size_t> (n / 2)];
+    for (auto& x : v)
+        x = std::abs (x - shift) < 1e-9 ? 0.0 : x - shift;
+    return v;
+}
+
+std::vector<double> WaveModel::mixWeights (const float* z, int numZ) const
+{
+    auto v = mixAmounts (z, numZ);
     double sum = 0.0;
     for (double x : v)
         sum += x;
     for (auto& x : v)
-        x += (1.0 - sum) / n;
+        x += (1.0 - sum) / static_cast<double> (v.size());
     return v;
+}
+
+std::vector<float> WaveModel::pointFromAmounts (const double* amounts, int n) const
+{
+    std::vector<float> z (static_cast<size_t> (numComponents()), 0.0f);
+    for (int j = 0; j < numComponents(); ++j)
+    {
+        double sum = 0.0;
+        for (int i = 0; i < std::min (n, numSounds()); ++i)
+            sum += amounts[i] * pca.score (i, j);
+        z[static_cast<size_t> (j)] = static_cast<float> (sum / sd (j));
+    }
+    return z;
 }
 
 // ---- file -------------------------------------------------------------------------

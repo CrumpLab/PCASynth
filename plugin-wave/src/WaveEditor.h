@@ -7,7 +7,8 @@
 #include "SpaceEditor.h"
 
 // PCAWave's window: the shared editor, with the waveform view of the current
-// point and a Mix tab (the point as a weighted sum of the training sounds).
+// point and a Mix tab (the point as amounts of the training sounds, set by
+// dragging).
 class PCAWaveEditor final : public SpaceEditor
 {
 public:

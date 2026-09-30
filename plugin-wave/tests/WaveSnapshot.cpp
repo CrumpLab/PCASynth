@@ -36,7 +36,21 @@ int main (int argc, char** argv)
         loadPreset (mode.fromFirstOccurrenceOf ("preset:", false, false));
     else if (mode == "mix")
     {
-        loadPreset ("Reed Into Vowel");
+        // A mix dialled in from the centre, as the Mix tab stores it.
+        const auto m = processor.getWaveModel();
+        std::vector<double> amounts (static_cast<size_t> (m->numSounds()), 0.0);
+        juce::StringArray items;
+        for (const auto& [name, amount] : { std::pair<const char*, double> { "reed_1", 0.6 }, { "vowel_1", 0.5 }, { "organ_2", -0.25 } })
+        {
+            const int i = m->soundIndex (name);
+            amounts[static_cast<size_t> (i)] = amount;
+            items.add (juce::String (i) + ":" + juce::String (amount));
+        }
+        const auto z = m->pointFromAmounts (amounts.data(), static_cast<int> (amounts.size()));
+        SpaceProcessor::Point p {};
+        std::copy (z.begin(), z.end(), p.begin());
+        processor.setPoint (p);
+        processor.setUiValue ("mixAmounts", items.joinIntoString (","));
         ed->selectTab (1);
     }
     else if (mode == "train" || mode == "inspect")

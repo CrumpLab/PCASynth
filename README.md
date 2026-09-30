@@ -15,8 +15,8 @@ bank of sine oscillators, so any pitch plays the learned timbre. See
 the **waveforms themselves**: a linear morph synthesizer in which every
 training sound plays back exactly as recorded and every other point is a
 mix of the training waveforms, lined up in pitch and phase so they blend.
-It has its own window (a waveform view and a **Mix** tab showing which mix
-you hear) and [its own manual](docs/manual-pcawave.md).
+It has its own window (a waveform view, and a **Mix** tab that is a mixer:
+drag in amounts of any training sounds from the centre of the space) and [its own manual](docs/manual-pcawave.md).
 
 By [Matthew Crump](https://crumplab.com), Brooklyn College of CUNY.
 

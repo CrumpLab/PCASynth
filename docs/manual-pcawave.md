@@ -10,7 +10,8 @@ synthesizer*:
 - every training sound plays back as itself, sample for sample (breath,
   hammer thumps, clicks and all: nothing is thrown away by an analysis);
 - every other point in the space is a **mix of the training waveforms**,
-  and the new **Mix** tab shows exactly which mix you are hearing.
+  and the new **Mix** tab is a mixer: dial in amounts of any training
+  sounds from the centre of the space, and see what you are hearing.
 
 Most of the plugin is shared with PCASynth: the sound map, morph pad,
 presets, random walk, LFOs and expression, MPE, training and the Inspect
@@ -108,25 +109,59 @@ except:
 
 ![The Mix tab](pcawave-mix.png)
 
-The point you are hearing, as a mix of the training sounds.
+A mixer for the space. Start from the centre (the average of all the
+sounds) and dial in amounts of any training sounds:
 
-- The line at the top lists the largest contributions, for example
-  *49 % vowel_1 + 11 % reed_1 + 7 % reed_6 − 6 % organ_2 …*.
-- Below, every training sound has a bar from the centre of its cell: blue
-  to the right adds that sound, orange to the left subtracts it. Bars are
-  scaled to the largest weight. Sounds with a weight under 5 % of the
-  largest are dimmed.
-- Click a sound's name to jump to it.
-- With many sounds, as many as fit are shown: the most heavily weighted
-  ones, in their usual order (the top line says so).
+  point = centre + a₁·(sound 1) + a₂·(sound 2) + …
 
-While a walk, LFO or MPE moves the point, the tab follows the point you are
-actually hearing.
+where each sound counts as its offset from the centre.
 
-The weights are exact at every point, whatever Components and Exaggerate
-are set to: each component is itself a combination of the training sounds,
-so any point is one too. (Of the many mixes that make the same waveform,
-the tab shows the one with the smallest weights.)
+- **Drag a sound's bar** left or right to set its amount. The bar's full
+  width is ±100 %; 160 pixels of drag is 100 % (hold **Shift** for ten
+  times finer). Amounts go up to ±300 %; beyond 100 % the bar shows a
+  bright cap.
+- **Blue** (right) mixes the sound in; **orange** (left) subtracts it.
+- **Double-click a bar** to set that amount back to 0.
+- **Click a sound's name** to go to it: that sound at 100 %, the rest 0.
+- **Clear Mix** returns to the centre.
+
+Some mixes to try from the centre:
+- *+100 % reed_1*: reed_1 exactly.
+- *+50 % reed_1, +50 % vowel_1*: halfway between them.
+- *+100 % reed_1, +100 % vowel_1*: both at full strength, twice as far
+  from the centre as either.
+- *+100 % reed_1, −50 % organ_2*: the reed with the organ's character taken
+  out.
+
+**The two lines at the top:**
+- The first is your mix, e.g. *Centre +60 % reed_1 +50 % vowel_1 −25 %
+  organ_2*.
+- *Hearing* is what actually sounds, as weights of the training sounds that
+  add up to 100 % (the centre counts as an equal share of every sound). It
+  differs from your mix while a walk, an LFO or MPE moves the point, or
+  when Exaggerate or Components Used change it. The difference also shows
+  as a white tick on each bar.
+
+**Other ways of moving** (the map, the morph pad, the PC sliders, Jump to,
+presets) change the point directly. The tab then reads the amounts back
+from the new point: exactly 100 % on a sound you jumped to, 0 everywhere
+at the centre, and otherwise the smallest amounts that make that point.
+Once you drag a bar, you are mixing from there.
+
+Your amounts are saved with the project, so a mix with a few sounds in it
+stays that way when you reopen it.
+
+**Beyond ±4 SD.** PC1–16 are limited to ±4 SD. A mix that would push one
+of them further stops there; when you let go, the amounts are re-read from
+the point it reached.
+
+**Fewer components than sounds.** When a space keeps fewer components than
+it has sounds minus one (the factory space keeps 24 for 60 sounds),
+different mixes can make the same point. Your amounts still set the point
+exactly; they are just not the only way to reach it.
+
+With many sounds, as many as fit are shown: the ones you use most, in their
+usual order (the *Hearing* line says so).
 
 ## 5. Playback and the voice
 

@@ -175,7 +175,72 @@ int main()
                 alone = std::abs (w[k] - (k == 3 ? 1.0 : 0.0)) < 1e-3;
             check (alone, "the Mix view shows a training sound as itself alone");
             check (! ed->getWaveView().waveform().empty(), "the waveform view shows the point");
+
+            // The mixer: amounts dialled in from the centre make the point.
+            mix.clearMix();
+            bool centred = true;
+            for (float v : t->getPoint())
+                centred = centred && std::abs (v) < 1e-5f;
+            mix.setAmount (2, 0.5);
+            mix.setAmount (5, 0.5);
+            const auto wm = t->getWaveModel();
+            const auto z2 = wm->soundZ (2), z5 = wm->soundZ (5);
+            const auto p = t->getPoint();
+            double gapMid = 0.0;
+            for (size_t j = 0; j < z2.size(); ++j)
+                gapMid = std::max (gapMid, static_cast<double> (std::abs (p[j] - 0.5f * (z2[j] + z5[j]))));
+            {
+                // While audio runs, the heard point comes from the audio thread,
+                // gliding to the new point over Morph Time.
+                juce::AudioBuffer<float> block (2, 512);
+                juce::MidiBuffer none;
+                for (int b = 0; b < 60; ++b)
+                    t->processBlock (block, none);
+            }
+            mix.refresh();
+            const auto& mw = mix.getWeights();
+            check (centred && gapMid < 1e-4 && std::abs (mw[2] - 0.5) < 1e-3 && std::abs (mw[5] - 0.5) < 1e-3 && std::abs (mw[0]) < 1e-3,
+                   "the Mix view is a mixer: 50 % of two sounds from the centre is their midpoint");
+
+            // The amounts are kept with the project, and read back when the point moves elsewhere.
+            juce::MemoryBlock mixState;
+            t->getStateInformation (mixState);
+            auto rp = fresh();
+            rp->setStateInformation (mixState.getData(), static_cast<int> (mixState.getSize()));
+            MixPanel restored (*rp);
+            restored.setSize (1160, 160);
+            restored.setModel (rp->getSpace());
+            const auto& ra = restored.getAmounts();
+            bool kept = ra.size() == 8;
+            for (size_t k = 0; k < ra.size() && kept; ++k)
+                kept = std::abs (ra[k] - (k == 2 || k == 5 ? 0.5 : 0.0)) < 1e-4;
+            check (kept, "the mix is saved with the state");
+            t->jumpToSound (6);
+            mix.refresh();
+            const auto& ja = mix.getAmounts();
+            bool followed = ja.size() == 8;
+            for (size_t k = 0; k < ja.size() && followed; ++k)
+                followed = std::abs (ja[k] - (k == 6 ? 1.0 : 0.0)) < 1e-6;
+            check (followed, "moving the point another way updates the mix");
         }
+    }
+
+    // The factory space keeps fewer components than sounds: jumping still reads as that sound alone.
+    {
+        MixPanel factoryMix (*a);
+        factoryMix.setSize (1160, 160);
+        a->jumpToSound (fm->soundIndex ("reed_1"));
+        factoryMix.setModel (a->getSpace());
+        const auto& fa = factoryMix.getAmounts();
+        const auto reed = static_cast<size_t> (fm->soundIndex ("reed_1"));
+        bool alone = fa.size() == 60;
+        for (size_t k = 0; k < fa.size() && alone; ++k)
+            alone = std::abs (fa[k] - (k == reed ? 1.0 : 0.0)) < 1e-6;
+        factoryMix.setAmount (fm->soundIndex ("vowel_1"), 0.3);
+        factoryMix.refresh();
+        const auto& fw = factoryMix.getWeights();
+        check (alone && std::abs (fw[reed] - 1.0) < 0.01 && std::abs (fw[static_cast<size_t> (fm->soundIndex ("vowel_1"))] - 0.3) < 0.01,
+               "in the factory space too, amounts read as set");
     }
 
     // Each plugin keeps to its own kind of space.

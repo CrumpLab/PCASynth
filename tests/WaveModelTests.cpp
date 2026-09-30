@@ -110,6 +110,51 @@ TEST_CASE ("Mix weights: a point is a weighted sum of the training sounds", "[wa
     CHECK (h[7] == Approx (0.5).margin (1e-4));
 }
 
+TEST_CASE ("Mix amounts: dialling sounds in from the centre", "[wave]")
+{
+    const auto m = smallModel();
+    const int n = m->numSounds(), k = m->numComponents();
+    auto near = [] (const std::vector<float>& a, const std::vector<float>& b) {
+        double d = 0.0;
+        for (size_t j = 0; j < a.size(); ++j)
+            d = std::max (d, static_cast<double> (std::abs (a[j] - b[j])));
+        return d;
+    };
+
+    // All 0 is the centre; 1 on one sound is that sound; halves are the midpoint.
+    std::vector<double> a (static_cast<size_t> (n), 0.0);
+    CHECK (near (m->pointFromAmounts (a.data(), n), std::vector<float> (static_cast<size_t> (k), 0.0f)) < 1e-6);
+    a[2] = 1.0;
+    CHECK (near (m->pointFromAmounts (a.data(), n), m->soundZ (2)) < 1e-4);
+    a[2] = 0.5;
+    a[5] = 0.5;
+    const auto s2 = m->soundZ (2), s5 = m->soundZ (5);
+    std::vector<float> mid (s2.size());
+    for (size_t j = 0; j < mid.size(); ++j)
+        mid[j] = 0.5f * (s2[j] + s5[j]);
+    CHECK (near (m->pointFromAmounts (a.data(), n), mid) < 1e-4);
+
+    // The same constant on every sound doesn't move the point.
+    auto shifted = a;
+    for (auto& x : shifted)
+        x += 0.3;
+    CHECK (near (m->pointFromAmounts (shifted.data(), n), m->pointFromAmounts (a.data(), n)) < 1e-4);
+
+    // Reading amounts back: the same point, and sparse at sounds and the centre.
+    const std::vector<double> mix { 0.4, 0.0, 0.0, -0.2, 0.0, 0.0, 0.7, 0.0 };
+    const auto z = m->pointFromAmounts (mix.data(), static_cast<int> (mix.size()));
+    const auto back = m->mixAmounts (z.data(), k);
+    CHECK (near (m->pointFromAmounts (back.data(), n), z) < 1e-4);
+    for (size_t i = 0; i < mix.size(); ++i)
+        CHECK (back[i] == Approx (mix[i]).margin (1e-4));
+    const auto at3 = m->mixAmounts (m->soundZ (3).data(), k);
+    for (int i = 0; i < n; ++i)
+        CHECK (at3[static_cast<size_t> (i)] == (i == 3 ? 1.0 : 0.0));
+    const std::vector<float> centre (static_cast<size_t> (k), 0.0f);
+    for (double x : m->mixAmounts (centre.data(), k))
+        CHECK (x == 0.0);
+}
+
 TEST_CASE ("Waveform level: the quadratic form matches the decoded waveform", "[wave]")
 {
     const auto m = smallModel();

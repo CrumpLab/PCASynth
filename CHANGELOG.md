@@ -13,9 +13,13 @@
   shifted by up to half a period to line its phase up with the others,
   loudness-matched and cut to a common Duration. Options: Sample rate
   (48/32/24 kHz), Align pitch, Align phase. Spaces are saved as `.pcsw`.
-- **Mix tab**: every training sound's weight at the point you hear (they
-  sum to 100 %; negative weights subtract a sound). Click a sound to go to
-  it.
+- **Mix tab**, a mixer: start from the centre of the space and drag in
+  (or subtract) amounts of any training sounds; the point is the centre
+  plus those amounts of each sound. Click a name to go to that sound,
+  double-click a bar to zero it, Clear Mix for the centre. A second line
+  and a tick per sound show what you actually hear under walks, LFOs and
+  MPE. Your amounts are saved with the project, and read back from the
+  point when it is moved another way.
 - **Waveform view**: the waveform at the point with loop or scan markers
   and playheads, four cycles close up, and a spectrogram.
 - **Voices** play the waveform at each note's pitch, recomputing it from
