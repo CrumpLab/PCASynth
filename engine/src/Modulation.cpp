@@ -133,6 +133,8 @@ void RandomWalk::advance (double dt, const WalkParams& p, double stepSeconds, co
         phase = 0.0;
     }
     phase = std::min (1.0, phase + dt / stepSeconds);
+    if (phase > 1.0 - 1e-9) // rounding must not delay the next step (platform-independent timing)
+        phase = 1.0;
     const float g = std::clamp (p.glide, 0.0f, 1.0f);
     const float t = g <= 0.0f ? 1.0f : smoothstep (std::min (1.0f, static_cast<float> (phase) / g));
     for (int j = 0; j < kMaxComponents; ++j)

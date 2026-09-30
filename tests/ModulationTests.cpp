@@ -140,35 +140,45 @@ TEST_CASE ("Tours arrive at training sounds; neighbour tours step to near ones",
         w.reset (9);
         Point home {};
         home[0] = 0.5f;
-        int visited = 0, last = -1;
+        auto dist = [&] (int x, int y) {
+            float d = 0.0f;
+            for (int j = 0; j < kMaxComponents; ++j)
+                d += std::pow (sounds[static_cast<size_t> (x)][static_cast<size_t> (j)] - sounds[static_cast<size_t> (y)][static_cast<size_t> (j)], 2.0f);
+            return d;
+        };
+        std::vector<int> path; // every sound the tour heads to, in order
         for (int step = 0; step < 12; ++step)
         {
             for (int i = 0; i < 100; ++i) // one 1 s step
+            {
                 w.advance (0.01, p, 1.0, home, sounds, ones());
+                if (path.empty() || w.currentSound() != path.back())
+                    path.push_back (w.currentSound());
+            }
+            // At the end of each step the walk has arrived at its sound.
             const int s = w.currentSound();
             REQUIRE (s >= 0);
-            CHECK (s != last);
             for (int j = 0; j < kMaxComponents; ++j)
                 REQUIRE (home[static_cast<size_t> (j)] + w.offset()[static_cast<size_t> (j)] == Approx (sounds[static_cast<size_t> (s)][static_cast<size_t> (j)]).margin (1e-4));
-            if (mode == WalkMode::NeighbourTour && last >= 0)
+        }
+        // One new sound per step, never the same twice in a row.
+        CHECK (path.size() == 12);
+        for (size_t k = 1; k < path.size(); ++k)
+        {
+            CHECK (path[k] != path[k - 1]);
+            if (mode == WalkMode::NeighbourTour)
             {
-                // s is among the 3 nearest to `last` (excluding last itself), give or take the no-backtrack rule.
-                auto dist = [&] (int a, int b) {
-                    float d = 0.0f;
-                    for (int j = 0; j < kMaxComponents; ++j)
-                        d += std::pow (sounds[static_cast<size_t> (a)][static_cast<size_t> (j)] - sounds[static_cast<size_t> (b)][static_cast<size_t> (j)], 2.0f);
-                    return d;
-                };
+                // Among the 3 nearest to the previous sound (not counting the one
+                // before it, which is excluded to avoid backtracking).
+                const int from = path[k - 1], to = path[k], before = k >= 2 ? path[k - 2] : -1;
                 int closer = 0;
                 for (int i = 0; i < m->numSounds(); ++i)
-                    if (i != last && dist (i, last) < dist (s, last))
+                    if (i != from && i != before && dist (i, from) < dist (to, from))
                         ++closer;
-                CHECK (closer <= 3);
+                CHECK (closer <= 2);
             }
-            last = s;
-            ++visited;
         }
-        CHECK (visited == 12);
+
     }
 }
 
