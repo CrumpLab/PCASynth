@@ -19,7 +19,7 @@ void usage()
 {
     std::cerr << "usage: pcs-train -o model.pcsm [options] <wav files or directories>\n"
                  "  --title T         name shown in the plugin (default: the file name)\n"
-                 "  --note N          MIDI note every sound plays (default 60 = C4)\n"
+                 "  --note N|auto     MIDI note every sound plays (default 60 = C4), or detect each\n"
                  "  --duration S      seconds analysed from each onset (default 4)\n"
                  "  --harmonics H     harmonics tracked (default 64, max 128)\n"
                  "  --frame-rate R    envelope frames per second (default 100)\n"
@@ -42,7 +42,14 @@ int main (int argc, char** argv)
         auto next = [&] { if (i + 1 >= argc) { usage(); std::exit (2); } return std::string (argv[++i]); };
         if (a == "-o") outPath = next();
         else if (a == "--title") title = next();
-        else if (a == "--note") s.midiNote = std::stoi (next());
+        else if (a == "--note")
+        {
+            const auto v = next();
+            if (v == "auto")
+                s.autoPitch = true;
+            else
+                s.midiNote = std::stoi (v);
+        }
         else if (a == "--duration") s.duration = std::stod (next());
         else if (a == "--harmonics") s.harmonics = std::stoi (next());
         else if (a == "--frame-rate") s.frameRate = std::stod (next());
@@ -66,8 +73,8 @@ int main (int argc, char** argv)
         {
             sounds.push_back (pcs::analyseHarmonics (pcs::readWav (path), s, pcs::tools::stem (path)));
             const auto& h = sounds.back();
-            const double cents = 1200.0 * std::log2 (h.f0 / pcs::midiToHz (s.midiNote));
-            std::printf ("  %-24s f0 %8.2f Hz (%+5.1f cents)\n", h.name.c_str(), h.f0, cents);
+            const double note = 69.0 + 12.0 * std::log2 (h.f0 / 440.0);
+            std::printf ("  %-24s f0 %8.2f Hz (MIDI %5.1f)\n", h.name.c_str(), h.f0, note);
         }
         auto model = pcs::trainModel (sounds, s, components);
         model.title = title.empty() ? pcs::tools::stem (outPath) : title;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Params.h"
+#include "Trainer.h"
 
 #include "pcs/Model.h"
 #include "pcs/Synth.h"
@@ -58,6 +59,11 @@ public:
     std::shared_ptr<const pcs::Model> getModel() const;
     bool isFactoryModel() const;
     static bool isModelFile (const juce::String& path) { return path.endsWithIgnoreCase (".pcsm"); }
+    juce::String saveModelFile (const juce::File& file) const; // empty on success
+
+    // Training a new space from audio files (Stage 4). A finished training
+    // replaces the model and moves the point to the centre of the new space.
+    Trainer& getTrainer() noexcept { return trainer; }
 
     // The point in the space: PC1..16 parameters plus the detail components
     // 17..32. setPoint writes all of them (PCs clamped to ±4); wrap drags in
@@ -118,6 +124,12 @@ private:
     std::array<std::atomic<float>, pcs::Synth::kMaxVoices> voicePos {};
     std::atomic<int> numVoicePos { 0 };
     std::shared_ptr<std::atomic<bool>> alive = std::make_shared<std::atomic<bool>> (true);
+
+    // Last: destroyed first, so its thread stops before anything it calls back into.
+    Trainer trainer { [this] (std::shared_ptr<const pcs::Model> m) {
+        setModel (std::move (m), false);
+        resetToMean();
+    } };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PCASynthProcessor)
 };

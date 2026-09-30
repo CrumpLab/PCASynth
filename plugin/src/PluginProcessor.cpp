@@ -58,6 +58,22 @@ juce::String PCASynthProcessor::loadModelFile (const juce::File& file)
     }
 }
 
+juce::String PCASynthProcessor::saveModelFile (const juce::File& file) const
+{
+    const auto m = getModel();
+    if (m == nullptr)
+        return "No model to save.";
+    try
+    {
+        pcs::saveModel (*m, file.getFullPathName().toStdString());
+        return {};
+    }
+    catch (const std::exception& e)
+    {
+        return e.what();
+    }
+}
+
 void PCASynthProcessor::setModel (std::shared_ptr<const pcs::Model> m, bool isFactory)
 {
     auto slot = pcs::Synth::makeSlot (m);
@@ -318,6 +334,8 @@ void PCASynthProcessor::getStateInformation (juce::MemoryBlock& destData)
     for (float v : getDetail())
         d.add (juce::String::toHexString (static_cast<juce::int64> (std::bit_cast<uint32_t> (v)))); // bit-exact
     state.setProperty ("detail", d.joinIntoString (","), nullptr);
+    state.removeChild (state.getChildWithName (Trainer::treeType), nullptr);
+    state.appendChild (trainer.toValueTree(), nullptr);
     auto xml = state.createXml();
     if (xml == nullptr)
         return;
@@ -358,6 +376,11 @@ void PCASynthProcessor::setStateInformation (const void* data, int sizeInBytes)
         for (int j = 0; j < items.size() && j < pcs::kMaxComponents; ++j)
             d[static_cast<size_t> (j)] = std::bit_cast<float> (static_cast<uint32_t> (items[j].getHexValue64()));
         setDetail (d);
+        if (const auto training = tree.getChildWithName (Trainer::treeType); training.isValid())
+        {
+            trainer.fromValueTree (training);
+            tree.removeChild (training, nullptr);
+        }
         parameters.replaceState (tree);
         sendChangeMessage(); // the editor re-reads its settings (map axes, morph corners)
     }

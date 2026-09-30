@@ -1,8 +1,11 @@
 // Renders the editor to a PNG without a window, with a chord sounding so the
 // playheads show.
 //   pcs-ui-snapshot out.png [width height] [training sound to jump to] [morph u v]
+//   pcs-ui-snapshot out.png width height train   (the Train panel after training on generated notes)
 #include "../src/PluginEditor.h"
 #include "../src/PluginProcessor.h"
+#include "TrainingSet.h"
+#include "pcs/Wav.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -26,7 +29,38 @@ int main (int argc, char** argv)
     editor->setSize (width, height);
     auto* ed = dynamic_cast<PCASynthEditor*> (editor.get());
 
-    if (argc > 6)
+    if (argc > 4 && juce::String (argv[4]) == "train")
+    {
+        auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("pcs-snapshot-train");
+        dir.deleteRecursively();
+        dir.createDirectory();
+        int i = 0;
+        for (const auto& family : pcs::testgen::families())
+        {
+            pcs::testgen::Options o;
+            o.midiNote = 48 + (i * 5) % 24;
+            o.duration = 2.0;
+            const auto clip = pcs::testgen::generate (family, i % 3, o);
+            pcs::writeWav (dir.getChildFile ("my " + juce::String (family) + ".wav").getFullPathName().toStdString(), clip.audio);
+            ++i;
+        }
+        auto& trainer = processor.getTrainer();
+        trainer.addFiles ({ dir.getFullPathName() });
+        auto s = trainer.getSettings();
+        s.analysis.autoPitch = true;
+        s.analysis.duration = 2.0;
+        s.title = "My instruments";
+        trainer.setSettings (s);
+        juce::String error;
+        trainer.trainNow (error);
+        ed->refreshModel();
+        ed->getTrainPanel().setVisible (true);
+        ed->getSoundMap().setVisible (false);
+        ed->getMorphPad().setVisible (false);
+        ed->getEnvelopeView().setVisible (false);
+        dir.deleteRecursively();
+    }
+    else if (argc > 6)
     {
         const float u = static_cast<float> (std::atof (argv[5])), v = static_cast<float> (std::atof (argv[6]));
         processor.setPoint (ed->getMorphPad().blend (u, v));
@@ -45,6 +79,7 @@ int main (int argc, char** argv)
         midi.clear();
     }
     ed->refresh();
+    ed->resized();
 
     const auto image = editor->createComponentSnapshot (editor->getLocalBounds(), true, 1.0f);
     juce::File out (juce::File::getCurrentWorkingDirectory().getChildFile (argv[1]));

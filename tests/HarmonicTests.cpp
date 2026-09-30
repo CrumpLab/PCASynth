@@ -84,3 +84,40 @@ TEST_CASE ("Harmonics above Nyquist and silence sit at the floor", "[harmonic]")
     CHECK (sound.at (45, 0) == -80.0f);    // after the tone
     CHECK_THROWS (analyseHarmonics (AudioBuffer { 48000.0, { std::vector<float> (4800, 0.0f) } }, s));
 }
+
+#include "TrainingSet.h"
+
+TEST_CASE ("Pitch detection finds the note of every synthetic family, at several pitches", "[harmonic][pitch]")
+{
+    for (int note : { 40, 60, 76 })
+    {
+        testgen::Options o;
+        o.midiNote = note;
+        o.duration = 1.5;
+        o.variations = 3;
+        for (const auto& c : testgen::generateTrainingSet (o))
+        {
+            INFO (c.name << " at MIDI " << note);
+            const auto mono = monoMix (c.audio);
+            const double f = detectPitch (mono, c.audio.sampleRate, 2400);
+            REQUIRE (f > 0.0);
+            CHECK (std::abs (69.0 + 12.0 * std::log2 (f / 440.0) - note) < 0.5);
+        }
+    }
+}
+
+TEST_CASE ("Auto pitch analyses each sound at its own pitch", "[harmonic][pitch]")
+{
+    AnalysisSettings s;
+    s.duration = 1.0;
+    s.harmonics = 16;
+    s.autoPitch = true;
+    auto amp = [] (int h, double) { return 0.4 / h; };
+    const auto low = analyseHarmonics (test::harmonicTone (midiToHz (45), 1.2, amp), s, "low");
+    const auto high = analyseHarmonics (test::harmonicTone (midiToHz (72) * 1.004, 1.2, amp), s, "high");
+    CHECK (low.f0 == Approx (midiToHz (45)).epsilon (0.001));
+    CHECK (high.f0 == Approx (midiToHz (72) * 1.004).epsilon (0.001));
+    // Same spectrum shape at both pitches.
+    for (int h = 0; h < 8; ++h)
+        CHECK (low.at (50, h) == Approx (high.at (50, h)).margin (0.5));
+}

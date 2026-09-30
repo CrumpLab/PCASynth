@@ -6,6 +6,7 @@
 #include "PluginProcessor.h"
 #include "SoundMap.h"
 #include "Theme.h"
+#include "TrainPanel.h"
 
 #include <juce_audio_utils/juce_audio_utils.h>
 
@@ -34,19 +35,22 @@ public:
     SoundMap& getSoundMap() noexcept { return soundMap; }
     MorphPad& getMorphPad() noexcept { return morphPad; }
     EnvelopeView& getEnvelopeView() noexcept { return envelope; }
+    TrainPanel& getTrainPanel() noexcept { return trainPanel; }
 
 private:
     void changeListenerCallback (juce::ChangeBroadcaster*) override { refreshModel(); }
     void timerCallback() override { refresh(); }
     void chooseModelFile();
     void chooseExportFile();
+    void chooseSaveFile();
+    void showTraining (bool show);
     void showMessage (const juce::String& text);
 
     PCASynthProcessor& processor;
     theme::LookAndFeel lookAndFeel;
     juce::TooltipWindow tooltips { this, 600 };
     juce::TextButton loadButton { "Load Model..." }, factoryButton { "Factory Space" }, exportButton { "Export WAV..." },
-        meanButton { "Centre" };
+        meanButton { "Centre" }, trainToggle { "Train..." }, saveButton { "Save Model..." };
     juce::Label title, modelInfo, jumpLabel { {}, "Jump to" }, status;
     juce::ComboBox soundBox;
     SoundMap soundMap;
@@ -54,6 +58,7 @@ private:
     EnvelopeView envelope;
     ComponentStrip strip;
     ControlPanel controls;
+    TrainPanel trainPanel;
     std::unique_ptr<juce::FileChooser> chooser;
     juce::int64 messageUntil = 0;
     bool dragging = false;

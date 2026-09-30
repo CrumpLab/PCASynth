@@ -32,6 +32,8 @@ target_sources(PCASynth PRIVATE
     src/PluginProcessor.cpp
     src/SoundMap.cpp
     src/Theme.cpp
+    src/TrainPanel.cpp
+    src/Trainer.cpp
 )
 
 # The factory model: the synthetic training set, generated and trained at
@@ -80,7 +82,7 @@ if(PCS_BUILD_TESTS)
 
     # Headless render of the editor to a PNG.
     add_executable(pcs-ui-snapshot tests/UiSnapshot.cpp)
-    target_link_libraries(pcs-ui-snapshot PRIVATE PCASynth)
+    target_link_libraries(pcs-ui-snapshot PRIVATE PCASynth pcs_tools_common)
     target_include_directories(pcs-ui-snapshot PRIVATE $<TARGET_PROPERTY:PCASynth,INCLUDE_DIRECTORIES>)
     target_compile_definitions(pcs-ui-snapshot PRIVATE $<TARGET_PROPERTY:PCASynth,COMPILE_DEFINITIONS>)
     target_compile_features(pcs-ui-snapshot PRIVATE cxx_std_20)

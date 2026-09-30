@@ -13,15 +13,15 @@ bank of sine oscillators, so any pitch plays the learned timbre. See
 
 By [Matthew Crump](https://crumplab.com), Brooklyn College of CUNY.
 
-**Status: Stage 3 (version 0.3.0).** A playable VST3 (plus a Standalone
+**Status: Stage 4 (version 0.4.0).** A playable VST3 (plus a Standalone
 app) with its own UI:
 - a map of the sound space,
 - a four-corner morph pad,
 - a live view of the harmonics at the current point,
-- the component sliders.
+- component sliders,
+- training on your own audio inside the plugin.
 
-It has a built-in space of 60 synthetic instrument notes, and you can load
-your own. It has not yet been played in a DAW.
+It has not yet been played in a DAW.
 
 ![The plugin window](docs/screenshot.png)
 
@@ -64,8 +64,27 @@ instrument. The zip also has a Standalone app for trying it without a DAW.
   far out). **Components** keeps only the first K.
 - **Jump to** / **Centre** go to a training sound or the average.
   **Export WAV…** renders the last note you played at the current point.
-- **Load Model…** or drop a `.pcsm` file on the window to play your own
-  space. It is saved inside your project.
+- **Load Model…** or drop a `.pcsm` file on the window to play a saved
+  space. **Save Model…** writes the current one. The space in use is saved
+  inside your project.
+
+## Training your own space
+
+1. Click **Train…**, then **Add Folder…**, or drop audio files or folders
+   onto the window. WAV, AIFF, FLAC and Ogg work everywhere; MP3/M4A work
+   on macOS.
+2. Each file should be a single note. Set **Note** to the note they all
+   play, or to **Auto** to detect each sound's pitch, so a set can mix
+   notes.
+3. Click **Train**. Analysis runs in the background. The list shows each
+   sound's detected pitch, and flags any file that failed.
+4. The new space replaces the current one, starting at its centre.
+
+Removing sounds or changing Components retrains quickly (analysed sounds
+are cached). Your project remembers the file list and settings, and
+**Save Model…** keeps the space as a file.
+
+![Training](docs/screenshot-train.png)
 
 ## Build
 

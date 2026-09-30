@@ -6,7 +6,7 @@ constexpr int kDefaultWidth = 1180, kDefaultHeight = 840;
 } // namespace
 
 PCASynthEditor::PCASynthEditor (PCASynthProcessor& p)
-    : AudioProcessorEditor (p), processor (p), soundMap (p), morphPad (p), envelope (p), strip (p), controls (p)
+    : AudioProcessorEditor (p), processor (p), soundMap (p), morphPad (p), envelope (p), strip (p), controls (p), trainPanel (p)
 {
     setLookAndFeel (&lookAndFeel);
     title.setText ("PCASynth", juce::dontSendNotification);
@@ -17,8 +17,16 @@ PCASynthEditor::PCASynthEditor (PCASynthProcessor& p)
     status.setJustificationType (juce::Justification::centredRight);
     for (auto* c : std::initializer_list<juce::Component*> { &title, &modelInfo, &jumpLabel, &status, &loadButton, &factoryButton,
                                                             &exportButton, &meanButton, &soundBox, &soundMap, &morphPad,
-                                                            &envelope, &strip, &controls })
+                                                            &envelope, &strip, &controls, &trainToggle, &saveButton })
         addAndMakeVisible (c);
+    addChildComponent (trainPanel);
+    trainPanel.onClose = [this] { showTraining (false); };
+    trainToggle.setClickingTogglesState (true);
+    trainToggle.setTooltip ("Build a new space from your own audio files");
+    trainToggle.onClick = [this] { showTraining (trainToggle.getToggleState()); };
+    saveButton.setTooltip ("Save the current space as a .pcsm file");
+    saveButton.onClick = [this] { chooseSaveFile(); };
+    showTraining (static_cast<bool> (processor.getUiValue ("showTraining", false)));
 
     loadButton.setTooltip ("Load a .pcsm model (or drop one on the window)");
     factoryButton.setTooltip ("The built-in space: 60 synthetic instrument notes");
@@ -80,8 +88,39 @@ void PCASynthEditor::refreshModel()
                        juce::dontSendNotification);
 }
 
+void PCASynthEditor::showTraining (bool show)
+{
+    trainToggle.setToggleState (show, juce::dontSendNotification);
+    trainPanel.setVisible (show);
+    for (auto* c : std::initializer_list<juce::Component*> { &soundMap, &morphPad, &envelope })
+        c->setVisible (! show);
+    processor.setUiValue ("showTraining", show);
+}
+
+void PCASynthEditor::chooseSaveFile()
+{
+    const auto m = processor.getModel();
+    if (m == nullptr)
+        return;
+    const auto stem = juce::File::createLegalFileName (m->title.empty() ? "PCASynth space" : m->title);
+    chooser = std::make_unique<juce::FileChooser> ("Save the sound space",
+                                                   juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile (stem + ".pcsm"),
+                                                   "*.pcsm");
+    chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles
+                              | juce::FileBrowserComponent::warnAboutOverwriting,
+                          [this] (const juce::FileChooser& fc) {
+                              auto file = fc.getResult();
+                              if (file == juce::File())
+                                  return;
+                              file = file.withFileExtension ("pcsm");
+                              const auto error = processor.saveModelFile (file);
+                              showMessage (error.isEmpty() ? "Saved " + file.getFileName() : error);
+                          });
+}
+
 void PCASynthEditor::refresh()
 {
+    trainPanel.refresh();
     soundMap.refresh();
     envelope.refresh();
     strip.refresh();
@@ -143,7 +182,7 @@ void PCASynthEditor::chooseExportFile()
 bool PCASynthEditor::isInterestedInFileDrag (const juce::StringArray& files)
 {
     for (const auto& f : files)
-        if (PCASynthProcessor::isModelFile (f))
+        if (PCASynthProcessor::isModelFile (f) || juce::File (f).isDirectory() || Trainer::isAudioFile (juce::File (f)))
         {
             dragging = true;
             repaint();
@@ -161,14 +200,23 @@ void PCASynthEditor::fileDragExit (const juce::StringArray&)
 void PCASynthEditor::filesDropped (const juce::StringArray& files, int, int)
 {
     dragging = false;
+    repaint();
+    // A model loads; audio files and folders go to the training set.
     for (const auto& f : files)
         if (PCASynthProcessor::isModelFile (f))
         {
             const auto error = processor.loadModelFile (juce::File (f));
             showMessage (error.isEmpty() ? "Loaded " + juce::File (f).getFileName() : error);
-            break;
+            return;
         }
-    repaint();
+    if (processor.getTrainer().isRunning())
+    {
+        showMessage ("Training is running; add sounds when it finishes.");
+        return;
+    }
+    const int added = processor.getTrainer().addFiles (files);
+    showTraining (true);
+    showMessage ("Added " + juce::String (added) + " sounds to the training set.");
 }
 
 void PCASynthEditor::paint (juce::Graphics& g)
@@ -193,12 +241,14 @@ void PCASynthEditor::resized()
     auto bar = r.removeFromTop (kBarHeight).reduced (12, 8);
     auto row1 = bar.removeFromTop (30);
     title.setBounds (row1.removeFromLeft (120));
-    loadButton.setBounds (row1.removeFromLeft (120).reduced (2));
-    factoryButton.setBounds (row1.removeFromLeft (120).reduced (2));
-    exportButton.setBounds (row1.removeFromLeft (120).reduced (2));
+    loadButton.setBounds (row1.removeFromLeft (112).reduced (2));
+    saveButton.setBounds (row1.removeFromLeft (112).reduced (2));
+    factoryButton.setBounds (row1.removeFromLeft (112).reduced (2));
+    trainToggle.setBounds (row1.removeFromLeft (84).reduced (2));
+    exportButton.setBounds (row1.removeFromLeft (112).reduced (2));
     row1.removeFromLeft (16);
     jumpLabel.setBounds (row1.removeFromLeft (56));
-    soundBox.setBounds (row1.removeFromLeft (220).reduced (2));
+    soundBox.setBounds (row1.removeFromLeft (200).reduced (2));
     meanButton.setBounds (row1.removeFromLeft (80).reduced (2));
     status.setBounds (row1);
     bar.removeFromTop (6);
@@ -214,6 +264,7 @@ void PCASynthEditor::resized()
     strip.setBounds (r);
     controls.setBounds (controlsArea);
 
+    trainPanel.setBounds (top);
     const int mapW = juce::jmin (top.getHeight() + 30, top.getWidth() * 36 / 100);
     soundMap.setBounds (top.removeFromLeft (mapW));
     top.removeFromLeft (gap);

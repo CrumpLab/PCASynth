@@ -41,32 +41,128 @@ std::vector<double> monoMix (const AudioBuffer& audio)
     return mono;
 }
 
-double estimateF0 (const std::vector<double>& mono, double sampleRate, size_t start, double nominalHz,
-                   double searchCents, int harmonics)
+namespace {
+// Long-term magnitude spectrum of up to one second of `mono` from `start`.
+struct LongSpectrum
 {
-    const size_t available = start < mono.size() ? mono.size() - start : 0;
-    const auto len = static_cast<int> (std::min<size_t> (available, static_cast<size_t> (sampleRate)));
-    if (len < 64)
-        return nominalHz;
+    std::vector<double> mag;
+    int n = 0;
+    double sampleRate = 48000.0;
 
-    const int n = nextPowerOfTwo (len) * 2;
-    Fft fft (n);
-    std::vector<double> re (static_cast<size_t> (n), 0.0), im (static_cast<size_t> (n), 0.0);
-    for (int i = 0; i < len; ++i)
-        re[static_cast<size_t> (i)] = mono[start + static_cast<size_t> (i)] * (0.5 - 0.5 * std::cos (2.0 * kPi * i / (len - 1)));
-    fft.forward (re.data(), im.data());
-    std::vector<double> mag (static_cast<size_t> (n / 2));
-    for (size_t k = 0; k < mag.size(); ++k)
-        mag[k] = std::hypot (re[k], im[k]);
-
-    auto magAt = [&] (double hz) {
+    bool valid() const noexcept { return ! mag.empty(); }
+    double at (double hz) const noexcept // max over the nearest 3 bins
+    {
         const auto k = static_cast<long> (std::lround (hz * n / sampleRate));
         double m = 0.0;
         for (long j = k - 1; j <= k + 1; ++j)
             if (j > 0 && j < static_cast<long> (mag.size()))
                 m = std::max (m, mag[static_cast<size_t> (j)]);
         return m;
-    };
+    }
+};
+
+LongSpectrum longSpectrum (const std::vector<double>& mono, double sampleRate, size_t start)
+{
+    LongSpectrum s;
+    s.sampleRate = sampleRate;
+    const size_t available = start < mono.size() ? mono.size() - start : 0;
+    const auto len = static_cast<int> (std::min<size_t> (available, static_cast<size_t> (sampleRate)));
+    if (len < 64)
+        return s;
+    s.n = nextPowerOfTwo (len) * 2;
+    Fft fft (s.n);
+    std::vector<double> re (static_cast<size_t> (s.n), 0.0), im (static_cast<size_t> (s.n), 0.0);
+    for (int i = 0; i < len; ++i)
+        re[static_cast<size_t> (i)] = mono[start + static_cast<size_t> (i)] * (0.5 - 0.5 * std::cos (2.0 * kPi * i / (len - 1)));
+    fft.forward (re.data(), im.data());
+    s.mag.resize (static_cast<size_t> (s.n / 2));
+    for (size_t k = 0; k < s.mag.size(); ++k)
+        s.mag[k] = std::hypot (re[k], im[k]);
+    return s;
+}
+} // namespace
+
+namespace {
+// YIN (de Cheveigné & Kawahara 2002) on one window: the period (samples) of
+// the first dip of the cumulative-mean-normalised difference below the
+// threshold, refined by parabolic interpolation; 0 if the window is unvoiced.
+double yinPeriod (const double* x, int window, int minLag, int maxLag)
+{
+    std::vector<double> d (static_cast<size_t> (maxLag + 2), 0.0);
+    for (int tau = 1; tau <= maxLag + 1; ++tau)
+    {
+        double sum = 0.0;
+        for (int i = 0; i < window; ++i)
+        {
+            const double diff = x[i] - x[i + tau];
+            sum += diff * diff;
+        }
+        d[static_cast<size_t> (tau)] = sum;
+    }
+    // Cumulative mean normalisation.
+    double running = 0.0;
+    std::vector<double> dn (d.size(), 1.0);
+    for (int tau = 1; tau <= maxLag + 1; ++tau)
+    {
+        running += d[static_cast<size_t> (tau)];
+        dn[static_cast<size_t> (tau)] = running > 0.0 ? d[static_cast<size_t> (tau)] * tau / running : 1.0;
+    }
+    constexpr double threshold = 0.15;
+    int best = -1;
+    for (int tau = std::max (2, minLag); tau <= maxLag; ++tau)
+        if (dn[static_cast<size_t> (tau)] < threshold)
+        {
+            while (tau + 1 <= maxLag && dn[static_cast<size_t> (tau + 1)] < dn[static_cast<size_t> (tau)])
+                ++tau;
+            best = tau;
+            break;
+        }
+    if (best < 0)
+    {
+        // No clear dip: the global minimum, if it is at least a weak one.
+        best = std::max (2, minLag);
+        for (int tau = best; tau <= maxLag; ++tau)
+            if (dn[static_cast<size_t> (tau)] < dn[static_cast<size_t> (best)])
+                best = tau;
+        if (dn[static_cast<size_t> (best)] > 0.5)
+            return 0.0;
+    }
+    const double a = dn[static_cast<size_t> (best - 1)], b = dn[static_cast<size_t> (best)], c = dn[static_cast<size_t> (best + 1)];
+    const double denom = a - 2.0 * b + c;
+    return best + (denom > 0.0 ? std::clamp (0.5 * (a - c) / denom, -0.5, 0.5) : 0.0);
+}
+} // namespace
+
+double detectPitch (const std::vector<double>& mono, double sampleRate, size_t start, double lowNote, double highNote)
+{
+    const int minLag = std::max (2, static_cast<int> (std::floor (sampleRate / midiToHz (highNote))));
+    const int maxLag = static_cast<int> (std::ceil (sampleRate / midiToHz (lowNote)));
+    const int window = std::max (maxLag, static_cast<int> (0.03 * sampleRate));
+    const auto need = static_cast<size_t> (window + maxLag + 2);
+
+    // Median over windows spread across the first second after `start`.
+    std::vector<double> periods;
+    for (int k = 0; k < 8; ++k)
+    {
+        const auto at = start + static_cast<size_t> (k * 0.12 * sampleRate);
+        if (at + need > mono.size())
+            break;
+        if (const double p = yinPeriod (mono.data() + at, window, minLag, maxLag); p > 0.0)
+            periods.push_back (p);
+    }
+    if (periods.empty())
+        return 0.0;
+    std::nth_element (periods.begin(), periods.begin() + static_cast<long> (periods.size() / 2), periods.end());
+    return sampleRate / periods[periods.size() / 2];
+}
+
+double estimateF0 (const std::vector<double>& mono, double sampleRate, size_t start, double nominalHz,
+                   double searchCents, int harmonics)
+{
+    const auto spec = longSpectrum (mono, sampleRate, start);
+    if (! spec.valid())
+        return nominalHz;
+    auto magAt = [&spec] (double hz) { return spec.at (hz); };
 
     double best = nominalHz, bestScore = -1.0;
     for (double c = -searchCents; c <= searchCents; c += 0.5)
@@ -109,7 +205,17 @@ HarmonicSound analyseHarmonics (const AudioBuffer& audio, const AnalysisSettings
     out.frameRate = s.frameRate;
     out.numHarmonics = s.harmonics;
     out.numFrames = std::max (1, static_cast<int> (std::lround (s.duration * s.frameRate)));
-    out.f0 = estimateF0 (mono, sr, start, midiToHz (s.midiNote), s.tuneSearchCents, s.harmonics);
+    double nominal = midiToHz (s.midiNote);
+    if (s.autoPitch)
+    {
+        // Skip the first 50 ms (attack noise) when there is enough sound after it.
+        const auto skip = static_cast<size_t> (0.05 * sr);
+        const double detected = detectPitch (mono, sr, start + skip < mono.size() / 2 ? start + skip : start);
+        if (detected <= 0.0)
+            throw std::runtime_error ((name.empty() ? std::string ("sound") : name) + ": no pitch found");
+        nominal = detected;
+    }
+    out.f0 = estimateF0 (mono, sr, start, nominal, s.autoPitch ? 30.0 : s.tuneSearchCents, s.harmonics);
 
     const int winLen = std::max (64, static_cast<int> (std::lround (s.periodsPerWindow * sr / out.f0)));
     const int n = nextPowerOfTwo (winLen) * 2;

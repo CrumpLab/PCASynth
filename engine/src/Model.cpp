@@ -48,7 +48,8 @@ std::vector<float> getFloats (const uint8_t* p, size_t count)
 
 nlohmann::json settingsToJson (const AnalysisSettings& s)
 {
-    return { { "midiNote", s.midiNote },           { "tuneSearchCents", s.tuneSearchCents },
+    return { { "midiNote", s.midiNote },           { "autoPitch", s.autoPitch },
+             { "tuneSearchCents", s.tuneSearchCents },
              { "duration", s.duration },           { "frameRate", s.frameRate },
              { "harmonics", s.harmonics },         { "floorDb", s.floorDb },
              { "periodsPerWindow", s.periodsPerWindow }, { "trimOnset", s.trimOnset },
@@ -58,6 +59,7 @@ AnalysisSettings settingsFromJson (const nlohmann::json& j)
 {
     AnalysisSettings s;
     s.midiNote = j.value ("midiNote", s.midiNote);
+    s.autoPitch = j.value ("autoPitch", s.autoPitch);
     s.tuneSearchCents = j.value ("tuneSearchCents", s.tuneSearchCents);
     s.duration = j.value ("duration", s.duration);
     s.frameRate = j.value ("frameRate", s.frameRate);
@@ -169,6 +171,15 @@ Model trainModel (const std::vector<HarmonicSound>& sounds, const AnalysisSettin
         m.f0s.push_back (s.f0);
         m.gainsDb.push_back (s.gainDb);
         rows.push_back (s.db);
+    }
+    if (settings.autoPitch)
+    {
+        // Nominal note of the set: the median detected pitch.
+        std::vector<double> notes;
+        for (double f : m.f0s)
+            notes.push_back (69.0 + 12.0 * std::log2 (f / 440.0));
+        std::nth_element (notes.begin(), notes.begin() + static_cast<long> (notes.size() / 2), notes.end());
+        m.analysis.midiNote = static_cast<int> (std::lround (notes[notes.size() / 2]));
     }
     m.pca = computePca (rows, std::min (maxComponents, kMaxComponents));
     m.finalize();

@@ -3,6 +3,7 @@
 #include "../src/PluginEditor.h"
 #include "../src/PluginProcessor.h"
 #include "TrainingSet.h"
+#include "pcs/Wav.h"
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
@@ -231,6 +232,84 @@ int main()
     for (float x : wav.channels[1])
         sumSq += x * x;
     check (wav.numSamples() == 96000 && wav.numChannels() == 2 && sumSq > 1.0, "export renders a stereo note");
+
+    // ---- Stage 4: training inside the plugin ----
+    {
+        auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("pcs-train-test");
+        dir.deleteRecursively();
+        dir.createDirectory();
+        const int notes[] = { 48, 55, 60, 67, 72, 52 };
+        const char* families[] = { "reed", "bowed", "vowel", "brass", "organ", "flute" };
+        for (int i = 0; i < 6; ++i)
+        {
+            pcs::testgen::Options o;
+            o.midiNote = notes[i];
+            o.duration = 1.6;
+            auto clip = pcs::testgen::generate (families[i], i % 3, o);
+            pcs::writeWav (dir.getChildFile (juce::String (families[i]) + ".wav").getFullPathName().toStdString(), clip.audio);
+        }
+        pcs::AudioBuffer silent;
+        silent.sampleRate = 48000.0;
+        silent.resize (1, 48000);
+        pcs::writeWav (dir.getChildFile ("silent.wav").getFullPathName().toStdString(), silent);
+        dir.getChildFile ("notes.txt").replaceWithText ("not audio");
+
+        auto t = fresh();
+        auto& trainer = t->getTrainer();
+        check (trainer.addFiles ({ dir.getFullPathName() }) == 7, "a folder adds its audio files (not the text file)");
+        check (trainer.addFiles ({ dir.getChildFile ("reed.wav").getFullPathName() }) == 0, "adding a file twice is ignored");
+
+        auto settings = trainer.getSettings();
+        settings.analysis.autoPitch = true;
+        settings.analysis.duration = 1.5;
+        settings.analysis.harmonics = 32;
+        settings.components = 4;
+        settings.title = "Mixed pitches";
+        trainer.setSettings (settings);
+        t->setPoint ({ 2.0f, 1.0f });
+
+        juce::String error;
+        const auto trained = trainer.trainNow (error);
+        check (trained != nullptr && trained->numSounds() == 6 && trained->numComponents() == 4, "trains on the sounds that analyse");
+        check (! t->isFactoryModel() && t->getModel()->title == "Mixed pitches", "the trained space replaces the model");
+        check (near (getParam (*t, "pc1"), 0.0f), "and the point moves to its centre");
+
+        bool pitches = true, silentFailed = false;
+        for (const auto& entry : trainer.getEntries())
+        {
+            if (entry.name == "silent")
+                silentFailed = entry.status == Trainer::Entry::Status::Failed;
+            else
+                for (int i = 0; i < 6; ++i)
+                    if (entry.name == families[i])
+                        pitches = pitches && std::abs (69.0 + 12.0 * std::log2 (entry.f0 / 440.0) - notes[i]) < 0.3;
+        }
+        check (pitches, "auto pitch finds each sound's note");
+        check (silentFailed, "a silent file is reported as failed");
+
+        const auto start = juce::Time::getMillisecondCounterHiRes();
+        trainer.remove ({ 0 }); // bowed
+        const auto again = trainer.trainNow (error);
+        const auto ms = juce::Time::getMillisecondCounterHiRes() - start;
+        check (again != nullptr && again->numSounds() == 5 && again->soundIndex ("bowed") < 0, "removing a sound and retraining");
+        std::printf ("     (retrain from cache took %.0f ms)\n", ms);
+
+        juce::MemoryBlock trainedState;
+        t->getStateInformation (trainedState);
+        auto u = fresh();
+        u->setStateInformation (trainedState.getData(), static_cast<int> (trainedState.getSize()));
+        const auto restoredEntries = u->getTrainer().getEntries();
+        check (restoredEntries.size() == 6 && u->getTrainer().getSettings().analysis.autoPitch
+                   && u->getTrainer().getSettings().title == "Mixed pitches" && u->getModel()->numSounds() == 5,
+               "training list, settings and the trained model are restored");
+
+        // The background thread.
+        check (u->getTrainer().start(), "training starts in the background");
+        for (int i = 0; i < 600 && u->getTrainer().isRunning(); ++i)
+            juce::Thread::sleep (10);
+        check (! u->getTrainer().isRunning() && u->getTrainer().getProgress() >= 1.0, "and finishes");
+        dir.deleteRecursively();
+    }
 
     std::printf (failures == 0 ? "all plugin checks passed\n" : "%d plugin checks FAILED\n", failures);
     return failures == 0 ? 0 : 1;

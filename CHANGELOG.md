@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.4.0] - 2026-09-30
+
+### Stage 4: training inside the plugin
+- **Train…** panel:
+  - Add files or folders (or drop them on the window), remove, clear.
+  - Settings: name, note (or Auto), duration, harmonics, floor,
+    components, loudness matching, onset alignment.
+  - Train in the background with progress and cancel.
+- Failed files are skipped and flagged with the reason.
+- Analysed sounds are cached, so edits to the set retrain quickly.
+- The training list and settings are saved with the project.
+- **Save Model…** writes the current space to a `.pcsm` file.
+- Engine: automatic pitch detection (YIN, then spectral refinement), so a
+  training set may mix notes. `pcs-train --note auto` works offline too.
+
 ## [0.3.0] - 2026-09-28
 
 ### Stage 3: custom UI

@@ -11,6 +11,7 @@ namespace pcs {
 struct AnalysisSettings
 {
     int midiNote = 60;               // nominal pitch of every training sound (60 = C4)
+    bool autoPitch = false;          // detect each sound's pitch instead (sounds may differ)
     double tuneSearchCents = 60.0;   // each sound's f0 is searched within ± this of the nominal
     double duration = 4.0;           // seconds analysed, from the onset
     double frameRate = 100.0;        // envelope frames per second
@@ -46,6 +47,12 @@ std::vector<double> monoMix (const AudioBuffer& audio);
 // the long-term spectrum of `mono` (from `start`, up to one second).
 double estimateF0 (const std::vector<double>& mono, double sampleRate, size_t start, double nominalHz,
                    double searchCents, int harmonics);
+
+// Pitch (Hz) between MIDI notes lowNote and highNote: the median of YIN
+// estimates over windows spread across the first second after `start`.
+// Returns 0 if no window is voiced.
+double detectPitch (const std::vector<double>& mono, double sampleRate, size_t start, double lowNote = 24.0,
+                    double highNote = 96.0);
 
 // Throws std::runtime_error if the sound is silent.
 HarmonicSound analyseHarmonics (const AudioBuffer& audio, const AnalysisSettings& settings, const std::string& name = {});

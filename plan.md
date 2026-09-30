@@ -6,8 +6,8 @@ of WAVs of different instruments all playing the same note. It learns the
 space those sounds span, and you play any point in that space: the training
 sounds themselves, morphs between them, or places no instrument has been.
 
-> **Status:** Stages 1–3 are built: the engine, the offline tools and a
-> playable VST3 with its own UI. Decisions are recorded in §6. Licence: open source (AGPLv3, following JUCE's open-source
+> **Status:** Stages 1–4 are built: the engine, the offline tools, and a
+> playable VST3 with its own UI that trains new spaces from your audio. Decisions are recorded in §6. Licence: open source (AGPLv3, following JUCE's open-source
 > licence).
 
 ---
@@ -215,7 +215,7 @@ Each stage ends with something to **hear**.
   examples.
 - **Done when:** you play it in your DAW from a CI build.
 
-### Stage 3: Custom UI — done, awaiting a play in a DAW
+### Stage 3: Custom UI — done
 - **Sound map:** the training sounds on any two components (X/Y menus list
   every component with its % of variance).
   - Hover a sound for its name and coordinates. Click it to jump there.
@@ -252,12 +252,45 @@ Each stage ends with something to **hear**.
   - Export renders a stereo note.
   - pluginval still passes at strictness 10.
 
-### Stage 4: Training inside the plugin
-- Drop a folder of WAVs on the window. Analysis and PCA run on a background
-  thread, and the new space is swapped in.
-- Training options in the UI: note (or auto-detect), duration, harmonics,
-  floor, loudness normalisation.
-- Add or remove sounds from the set and retrain.
+### Stage 4: Training inside the plugin — done, awaiting a play in a DAW
+- **Train…** opens a panel in place of the map, morph pad and envelope view.
+- **Adding sounds:**
+  - Add Files…, Add Folder… (searched recursively), or drop audio files or
+    folders anywhere on the window.
+  - Formats: WAV, AIFF, FLAC, Ogg, and MP3/M4A/CAF where the OS decodes them.
+  - Remove (or the Delete key) and Clear edit the set. Each sound shows its
+    detected pitch (note, cents, Hz), or why it failed.
+- **Settings:**
+  - Name.
+  - Note: a fixed MIDI note, or **Auto**, which detects each sound's own
+    pitch, so a set may mix notes.
+  - Duration, Harmonics, Floor, Components.
+  - Match loudness, Align onsets.
+- **Train** runs analysis and PCA on a background thread with progress and
+  a Cancel button. Files that fail (unreadable, silent, no pitch) are
+  skipped and flagged; at least two must analyse. The new space replaces
+  the model, and the point moves to its centre.
+- **Cache:** analysed sounds are kept per file, keyed by modification time
+  and analysis settings. Removing sounds or changing Components or Name
+  retrains without re-analysing.
+- **Save Model…** writes the current space as a `.pcsm`. The trained model
+  is also embedded in the project, as in Stage 2.
+- The training list (paths, not audio) and settings are saved with the
+  project, so the set can be edited and retrained later if the files are
+  still there.
+- **Pitch detection (engine):** YIN over eight windows in the first second,
+  median, then the spectral refinement (±30 cents). Finds all 10 synthetic
+  families at MIDI 40, 60 and 76. That includes a vowel whose 3rd harmonic
+  is 2.6× its fundamental and a bright low pluck, both of which broke the
+  first, spectral-sum detector. `pcs-train --note auto` does the same
+  offline.
+- Tests:
+  - A folder adds only audio files, and duplicates are ignored.
+  - Mixed pitches are detected within 0.3 semitones.
+  - A silent file fails cleanly.
+  - Remove and retrain.
+  - The training list, settings and model survive a state round trip.
+  - The background thread finishes.
 
 ### Stage 5: Movement and expression
 - Modulation of the point: LFOs and a random walk per component, velocity →
