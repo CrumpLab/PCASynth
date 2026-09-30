@@ -58,6 +58,7 @@ struct SynthParams
     float noiseDb = 0.0f;                   // residual noise level vs the model (dB); <= -60 mutes it (Stage 7)
     float keytrack = 1.0f;                  // how much timbre follows pitch (models with pitch tracking)
     float levelLock = 0.0f;                 // 0..1: pulls every point's loudness towards the training sounds' (Stage 8)
+    float pitchEnvelope = 1.0f;             // how much of the learned pitch curve (vibrato, glides, pitch drops) to play
     double bpm = 120.0;                     // for synced walk steps and LFOs
 };
 
@@ -171,6 +172,8 @@ private:
         // Stage 7: partial frequencies, timbre following pitch, noise.
         std::array<float, kMaxHarmonics> cents {}, hf {}; // partial offsets applied; partial frequencies (Hz)
         float pitchDelta = 0.0f;
+        float curveCents = 0.0f; // the pitch curve applied (cents)
+        bool retunePending = false; // a new note: set curve and partials exactly on its first sub-block
         int numNoiseBands = 0;
         alignas (32) std::array<float, kMaxNoiseBands> nb0 {}, na1 {}, na2 {}, nz1 {}, nz2 {}, nGain {}, nNorm {}, nFc {};
         alignas (32) std::array<uint32_t, kMaxNoiseBands> noiseRng {}; // an independent source per band (their powers add)
@@ -190,6 +193,7 @@ private:
     bool isMemberChannel (int channel) const noexcept;
     void setVoiceFrequency (Voice& v) noexcept;
     void setNoiseFilters (Voice& v) noexcept;
+    float pitchCurveAt (const Voice& v, double pos) const noexcept; // cents, Pitch Envelope applied
     void render (float* out, int n) noexcept;
     void renderVoice (Voice& v, int n) noexcept;
     int frame (int t) noexcept; // decodes frame t at the heard point into the caches (once per point); returns t clamped

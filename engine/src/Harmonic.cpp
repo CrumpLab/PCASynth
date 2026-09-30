@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 
 namespace pcs {
@@ -24,6 +25,132 @@ std::vector<double> blackmanHarris (int n)
 }
 
 double toDb (double x) noexcept { return 20.0 * std::log10 (std::max (x, 1e-12)); }
+
+std::vector<double> hann (int n)
+{
+    std::vector<double> w (static_cast<size_t> (n));
+    for (int i = 0; i < n; ++i)
+        w[static_cast<size_t> (i)] = 0.5 - 0.5 * std::cos (2.0 * kPi * i / (n - 1));
+    return w;
+}
+
+// The magnitude spectrum (dB, sinusoid peak amplitude) of one windowed frame,
+// zero-padded twice over, and peak finding in it.
+class FrameSpectrum
+{
+public:
+    explicit FrameSpectrum (std::vector<double> w)
+        : window (std::move (w)), n (nextPowerOfTwo (static_cast<int> (window.size())) * 2), fft (n),
+          re (static_cast<size_t> (n)), im (static_cast<size_t> (n)), magDb (static_cast<size_t> (n / 2 + 1))
+    {
+        for (double x : window)
+            windowSum += x;
+    }
+
+    // The frame centred at `centre`, except that it never starts before
+    // `earliest` (a window straddling the onset would smear it into a click).
+    void compute (const std::vector<double>& mono, long centre, long earliest, double sampleRate)
+    {
+        binHz = sampleRate / n;
+        const long first = std::max (centre - static_cast<long> (window.size()) / 2, earliest);
+        std::fill (re.begin(), re.end(), 0.0);
+        std::fill (im.begin(), im.end(), 0.0);
+        double sq = 0.0, wsq = 0.0;
+        for (size_t i = 0; i < window.size(); ++i)
+        {
+            const long j = first + static_cast<long> (i);
+            if (j >= 0 && j < static_cast<long> (mono.size()))
+                re[i] = mono[static_cast<size_t> (j)] * window[i];
+            sq += re[i] * re[i];
+            wsq += window[i] * window[i];
+        }
+        lastRms = std::sqrt (sq / std::max (wsq, 1e-30));
+        fft.forward (re.data(), im.data());
+        for (size_t k = 0; k < magDb.size(); ++k)
+            magDb[k] = toDb (std::hypot (re[k], im[k]) * 2.0 / windowSum);
+    }
+
+    // Level (dB) at the bin nearest `hz`.
+    double at (double hz) const noexcept
+    {
+        return magDb[static_cast<size_t> (std::clamp (std::lround (hz / binHz), 0L, static_cast<long> (magDb.size()) - 1))];
+    }
+
+    // Mean power (dB) over the bins in [loHz, hiHz].
+    double meanLevel (double loHz, double hiHz) const noexcept
+    {
+        const long last = static_cast<long> (magDb.size()) - 1;
+        const long k0 = std::clamp (std::lround (loHz / binHz), 0L, last), k1 = std::clamp (std::lround (hiHz / binHz), k0, last);
+        double p = 0.0;
+        for (long k = k0; k <= k1; ++k)
+            p += std::pow (10.0, magDb[static_cast<size_t> (k)] / 10.0);
+        return 10.0 * std::log10 (std::max (p / static_cast<double> (k1 - k0 + 1), 1e-30));
+    }
+
+    // RMS of the windowed frame last computed (as the window weights it).
+    double windowedRms() const noexcept { return lastRms; }
+
+    // Level (dB) of the strongest peak within ± halfWidth Hz of `hz`, with
+    // parabolic interpolation; its frequency in *peakHz.
+    double peak (double hz, double halfWidth, double* peakHz = nullptr) const
+    {
+        const long last = static_cast<long> (magDb.size()) - 2;
+        const long lo = std::clamp (std::lround ((hz - halfWidth) / binHz), 1L, last);
+        const long hi = std::clamp (std::lround ((hz + halfWidth) / binHz), lo, last);
+        long k = lo;
+        for (long j = lo; j <= hi; ++j)
+            if (magDb[static_cast<size_t> (j)] > magDb[static_cast<size_t> (k)])
+                k = j;
+        const double a = magDb[static_cast<size_t> (k - 1)], b = magDb[static_cast<size_t> (k)], c = magDb[static_cast<size_t> (k + 1)];
+        const double denom = a - 2.0 * b + c;
+        const double p = denom < 0.0 ? std::clamp (0.5 * (a - c) / denom, -0.5, 0.5) : 0.0;
+        if (peakHz != nullptr)
+            *peakHz = (static_cast<double> (k) + p) * binHz;
+        return b - 0.25 * (a - c) * p;
+    }
+
+private:
+    std::vector<double> window;
+    int n;
+    Fft fft;
+    std::vector<double> re, im, magDb;
+    double windowSum = 0.0, binHz = 1.0, lastRms = 0.0;
+};
+
+// `x` high-passed (2nd-order Butterworth) at `hz`, forwards and backwards (no phase shift).
+std::vector<double> highPass (const std::vector<double>& x, double sampleRate, double hz)
+{
+    const double w = 2.0 * kPi * std::min (hz, 0.45 * sampleRate) / sampleRate, alpha = std::sin (w) / std::sqrt (2.0), c = std::cos (w);
+    const double a0 = 1.0 + alpha, b0 = (1.0 + c) / 2.0 / a0, b1 = -(1.0 + c) / a0, a1 = -2.0 * c / a0, a2 = (1.0 - alpha) / a0;
+    std::vector<double> y (x);
+    for (int pass = 0; pass < 2; ++pass)
+    {
+        double x1 = 0.0, x2 = 0.0, y1 = 0.0, y2 = 0.0;
+        for (size_t i = 0; i < y.size(); ++i)
+        {
+            const size_t k = pass == 0 ? i : y.size() - 1 - i;
+            const double in = y[k], out = b0 * in + b1 * x1 + b0 * x2 - a1 * y1 - a2 * y2;
+            x2 = x1;
+            x1 = in;
+            y2 = y1;
+            y1 = out;
+            y[k] = out;
+        }
+    }
+    return y;
+}
+
+// RMS of `mono` over one period (at least 2 ms) centred at `centre`.
+double shortRms (const std::vector<double>& mono, long centre, double sampleRate, double f0)
+{
+    const long half = std::max (static_cast<long> (0.001 * sampleRate), static_cast<long> (std::lround (0.5 * sampleRate / f0)));
+    double sq = 0.0;
+    long n = 0;
+    for (long j = centre - half; j < centre + half; ++j, ++n)
+        if (j >= 0 && j < static_cast<long> (mono.size()))
+            sq += mono[static_cast<size_t> (j)] * mono[static_cast<size_t> (j)];
+    return std::sqrt (sq / static_cast<double> (std::max (1L, n)));
+}
 } // namespace
 
 double noiseBandEdge (int b, int bands) noexcept
@@ -253,16 +380,21 @@ HarmonicSound analyseHarmonics (const AudioBuffer& audio, const AnalysisSettings
         throw std::runtime_error ((name.empty() ? std::string ("sound") : name) + " is silent");
 
     size_t start = 0;
+    long onsetIndex = 0; // where the sound starts
     if (s.trimOnset)
     {
         const double threshold = peak * std::pow (10.0, s.onsetThresholdDb / 20.0);
         while (start < mono.size() && std::abs (mono[start]) < threshold)
             ++start;
-        start -= std::min (start, static_cast<size_t> (0.005 * sr)); // keep 5 ms before the onset
+        onsetIndex = static_cast<long> (start);
+        // Keep a little before the onset: 5 ms, or 1 ms with sharp attacks
+        // (whose frames don't reach back past the onset, so frame 0 is the note's start).
+        start -= std::min (start, static_cast<size_t> ((s.sharpAttacks ? 0.001 : 0.005) * sr));
     }
 
     HarmonicSound out;
     out.name = name;
+    out.onsetSeconds = static_cast<double> (start) / sr;
     out.frameRate = s.frameRate;
     out.numHarmonics = s.harmonics;
     out.numFrames = std::max (1, static_cast<int> (std::lround (s.duration * s.frameRate)));
@@ -301,53 +433,115 @@ HarmonicSound analyseHarmonics (const AudioBuffer& audio, const AnalysisSettings
     };
 
     const int winLen = std::max (64, static_cast<int> (std::lround (s.periodsPerWindow * sr / out.f0)));
-    const int n = nextPowerOfTwo (winLen) * 2;
-    const auto window = blackmanHarris (winLen);
-    double windowSum = 0.0;
-    for (double w : window)
-        windowSum += w;
+    FrameSpectrum longSpec (blackmanHarris (winLen));
+    // Sharp attacks: the onset frames also look through a window half as long
+    // (Hann, whose main lobe at half the length is as narrow as Blackman-Harris's
+    // at the full length), blended into the long one after attackSeconds.
+    const bool sharp = s.sharpAttacks && s.attackSeconds > 0.0;
+    FrameSpectrum shortSpec (hann (std::max (32, winLen / 2)));
+    const double fadeSeconds = 0.05;
+    // For the attack's level: the sound without what lies below the fundamental
+    // (thumps, DC steps), which the harmonics can't play anyway.
+    const auto aboveF0 = sharp ? highPass (mono, sr, 0.6 * out.f0) : std::vector<double>();
 
-    Fft fft (n);
-    std::vector<double> re (static_cast<size_t> (n)), im (static_cast<size_t> (n));
-    std::vector<double> magDb (static_cast<size_t> (n / 2 + 1));
     out.db.assign (static_cast<size_t> (out.numFrames * out.numHarmonics), static_cast<float> (s.floorDb));
     out.numNoiseBands = std::max (0, s.noiseBands);
     out.noiseDb.assign (static_cast<size_t> (out.numFrames * out.numNoiseBands), -300.0f);
 
     const double hop = sr / s.frameRate;
-    const double binHz = sr / n;
+    // Where the sound starts (analysis starts 5 ms earlier): no window reaches back past it.
+    const long onset = sharp ? onsetIndex : std::numeric_limits<long>::min() / 2;
+    const double voicedDb = toDb (peak) - 45.0; // harmonic peaks weaker than this don't steer the pitch
+    std::vector<double> ratios (static_cast<size_t> (out.numFrames), 1.0); // each frame's pitch / f0
+    std::vector<char> voiced (static_cast<size_t> (out.numFrames), 0);
+    std::vector<double> longDb (static_cast<size_t> (out.numHarmonics)), shortDb (static_cast<size_t> (out.numHarmonics));
+    double ratio = 1.0;
     for (int t = 0; t < out.numFrames; ++t)
     {
-        const auto first = static_cast<long> (start) + std::lround (t * hop) - winLen / 2;
-        std::fill (re.begin(), re.end(), 0.0);
-        std::fill (im.begin(), im.end(), 0.0);
-        for (int i = 0; i < winLen; ++i)
-        {
-            const long j = first + i;
-            if (j >= 0 && j < static_cast<long> (mono.size()))
-                re[static_cast<size_t> (i)] = mono[static_cast<size_t> (j)] * window[static_cast<size_t> (i)];
-        }
-        fft.forward (re.data(), im.data());
-        for (size_t k = 0; k < magDb.size(); ++k)
-            magDb[k] = toDb (std::hypot (re[k], im[k]) * 2.0 / windowSum);
+        const auto centre = static_cast<long> (start) + std::lround (t * hop);
+        longSpec.compute (mono, centre, onset, sr);
 
+        // Where the partials are in this frame: the loud low partials' peak
+        // frequencies, each divided by its place in the series, averaged by
+        // amplitude. Tracked from the previous frame, so vibrato and glides are
+        // followed; frames without clear partials keep the last pitch.
+        if (s.trackPitch)
+            for (int pass = 0; pass < 2; ++pass)
+            {
+                double num = 0.0, den = 0.0, strongest = 0.0;
+                int clear = 0;
+                for (int h = 0; h < std::min (out.numHarmonics, 12); ++h)
+                {
+                    const double f = partial[static_cast<size_t> (h)] * ratio;
+                    if (f > 0.45 * sr)
+                        break;
+                    double peakHz = 0.0;
+                    const double spacing = spacingAt (h) * ratio;
+                    const double level = longSpec.peak (f, 0.35 * spacing, &peakHz);
+                    // Only clear partials: loud enough, and standing 12 dB above
+                    // the spectrum halfway to their neighbours (noise has no such peaks).
+                    const double valley = std::max (longSpec.meanLevel (f - 0.6 * spacing, f - 0.4 * spacing),
+                                                    longSpec.meanLevel (f + 0.4 * spacing, f + 0.6 * spacing));
+                    if (level < voicedDb || level < valley + 15.0)
+                        continue;
+                    ++clear;
+                    strongest = std::max (strongest, level - valley);
+                    const double w = std::pow (10.0, level / 20.0);
+                    num += w * peakHz / partial[static_cast<size_t> (h)];
+                    den += w;
+                }
+                // Voiced: two clear partials, or one standing far out (a pure tone).
+                if (den <= 0.0 || (clear < 2 && strongest < 30.0))
+                    break;
+                const double estimate = num / den;
+                if (std::abs (std::log2 (estimate / ratio)) < 0.25)
+                {
+                    ratio = std::clamp (estimate, 0.5, 2.0);
+                    voiced[static_cast<size_t> (t)] = 1;
+                }
+            }
+        ratios[static_cast<size_t> (t)] = ratio;
+
+        const double time = t / s.frameRate;
+        const double shortWeight = sharp ? std::clamp ((s.attackSeconds + fadeSeconds - time) / fadeSeconds, 0.0, 1.0) : 0.0;
+        if (shortWeight > 0.0)
+            shortSpec.compute (mono, centre, onset, sr);
+        // In the attack, the windows (which may not reach back past the onset)
+        // give each frame's spectral shape, and a one-period RMS at the frame's
+        // own time its level: onsets stay crisp and swells keep their shape.
+        double levelFix = 0.0;
+        if (shortWeight > 0.0)
+        {
+            const double seen = shortWeight * shortSpec.windowedRms() + (1.0 - shortWeight) * longSpec.windowedRms();
+            const double actual = shortRms (aboveF0, centre, sr, out.f0 * ratio);
+            if (seen > 0.0 && actual > 0.0)
+                levelFix = shortWeight * std::clamp (20.0 * std::log10 (actual / seen), -40.0, 12.0);
+        }
         for (int h = 0; h < out.numHarmonics; ++h)
         {
-            const double f = partial[static_cast<size_t> (h)];
+            const double f = partial[static_cast<size_t> (h)] * ratio;
             if (f > 0.48 * sr)
                 break;
-            const double half = 0.35 * spacingAt (h);
-            const long lo = std::max (1L, std::lround ((f - half) / binHz));
-            const long hi = std::min (static_cast<long> (magDb.size()) - 2, std::lround ((f + half) / binHz));
-            long k = lo;
-            for (long j = lo; j <= hi; ++j)
-                if (magDb[static_cast<size_t> (j)] > magDb[static_cast<size_t> (k)])
-                    k = j;
-            // Parabolic interpolation of the peak level.
-            const double a = magDb[static_cast<size_t> (k - 1)], b = magDb[static_cast<size_t> (k)], c = magDb[static_cast<size_t> (k + 1)];
-            const double denom = a - 2.0 * b + c;
-            const double p = denom < 0.0 ? std::clamp (0.5 * (a - c) / denom, -0.5, 0.5) : 0.0;
-            out.db[static_cast<size_t> (t * out.numHarmonics + h)] = static_cast<float> (b - 0.25 * (a - c) * p);
+            const double half = 0.35 * spacingAt (h) * ratio;
+            double level = longSpec.peak (f, half);
+            if (shortWeight > 0.0)
+                level = shortWeight * shortSpec.peak (f, half) + (1.0 - shortWeight) * level;
+            out.db[static_cast<size_t> (t * out.numHarmonics + h)] = static_cast<float> (level + levelFix);
+        }
+    }
+    if (s.trackPitch)
+    {
+        // Frames before the first voiced one take its pitch; then a 3-frame median.
+        const auto firstVoiced = std::find (voiced.begin(), voiced.end(), 1);
+        if (firstVoiced != voiced.end())
+            std::fill (ratios.begin(), ratios.begin() + (firstVoiced - voiced.begin()), ratios[static_cast<size_t> (firstVoiced - voiced.begin())]);
+        out.pitchCents.resize (static_cast<size_t> (out.numFrames));
+        for (int t = 0; t < out.numFrames; ++t)
+        {
+            double a = ratios[static_cast<size_t> (std::max (0, t - 1))], b = ratios[static_cast<size_t> (t)],
+                   c = ratios[static_cast<size_t> (std::min (out.numFrames - 1, t + 1))];
+            const double median = std::max (std::min (a, b), std::min (std::max (a, b), c));
+            out.pitchCents[static_cast<size_t> (t)] = static_cast<float> (std::clamp (1200.0 * std::log2 (median), -1200.0, 1200.0));
         }
     }
 
@@ -389,7 +583,7 @@ HarmonicSound analyseHarmonics (const AudioBuffer& audio, const AnalysisSettings
 
         for (int t = 0; t < out.numFrames; ++t)
         {
-            const auto first = static_cast<long> (start) + std::lround (t * hop) - nLen / 2;
+            const auto first = std::max (static_cast<long> (start) + std::lround (t * hop) - nLen / 2, std::min (onset, static_cast<long> (mono.size()) - nLen));
             std::fill (nre.begin(), nre.end(), 0.0);
             std::fill (nim.begin(), nim.end(), 0.0);
             for (int i = 0; i < nLen; ++i)
@@ -399,16 +593,23 @@ HarmonicSound analyseHarmonics (const AudioBuffer& audio, const AnalysisSettings
                     nre[static_cast<size_t> (i)] = mono[static_cast<size_t> (j)] * nWindow[static_cast<size_t> (i)];
             }
             nfft.forward (nre.data(), nim.data());
+            // The partials (and the bands, which sit at ratios of the pitch) move
+            // with this frame's pitch: bin k lines up with bin k / ratio of the mask.
+            const double ratio = ratios[static_cast<size_t> (t)], f0t = out.f0 * ratio;
+            auto isQuiet = [&] (long k) {
+                const auto m = static_cast<size_t> (std::lround (static_cast<double> (k) / ratio));
+                return m >= quiet.size() || quiet[m] != 0;
+            };
             for (int b = 0; b < out.numNoiseBands; ++b)
             {
-                const double lo = noiseBandEdge (b, out.numNoiseBands) * out.f0, hi = noiseBandEdge (b + 1, out.numNoiseBands) * out.f0;
+                const double lo = noiseBandEdge (b, out.numNoiseBands) * f0t, hi = noiseBandEdge (b + 1, out.numNoiseBands) * f0t;
                 if (lo >= 0.48 * sr)
                     break;
                 const long k0 = std::max (1L, static_cast<long> (std::ceil (lo / nBin)));
                 const long k1 = std::min (static_cast<long> (quiet.size()) - 1, static_cast<long> (std::floor (std::min (hi, 0.48 * sr) / nBin)));
                 bandPowers.clear();
                 for (long k = k0; k <= k1; ++k)
-                    if (quiet[static_cast<size_t> (k)])
+                    if (isQuiet (k))
                         bandPowers.push_back (nre[static_cast<size_t> (k)] * nre[static_cast<size_t> (k)] + nim[static_cast<size_t> (k)] * nim[static_cast<size_t> (k)]);
                 if (bandPowers.empty() || k1 < k0)
                     continue;
@@ -440,7 +641,7 @@ HarmonicSound analyseHarmonics (const AudioBuffer& audio, const AnalysisSettings
             float* row = out.noiseDb.data() + static_cast<size_t> (t * out.numNoiseBands);
             for (int b = 0; b < out.numNoiseBands; ++b)
             {
-                if (measured[static_cast<size_t> (b)] || noiseBandEdge (b, out.numNoiseBands) * out.f0 >= 0.48 * sr)
+                if (measured[static_cast<size_t> (b)] || noiseBandEdge (b, out.numNoiseBands) * f0t >= 0.48 * sr)
                     continue;
                 double density = 0.0;
                 int sources = 0;

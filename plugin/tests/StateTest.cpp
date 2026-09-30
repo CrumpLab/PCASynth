@@ -579,6 +579,106 @@ int main()
         file.getParentDirectory().deleteRecursively();
     }
 
+    // ---- Fidelity and inspection ----
+    {
+        auto q = fresh();
+        setParam (*q, "pitch_env", 0.5f);
+        check (std::abs (q->currentSynthParams().pitchEnvelope - 0.5f) < 0.01f, "Pitch Envelope reaches the synth");
+
+        // Training options round trip.
+        auto& tr = q->getTrainer();
+        auto ts = tr.getSettings();
+        ts.analysis.frameRate = 200.0;
+        ts.analysis.trackPitch = false;
+        ts.analysis.sharpAttacks = false;
+        tr.setSettings (ts);
+        juce::MemoryBlock st;
+        q->getStateInformation (st);
+        auto q2 = fresh();
+        q2->setStateInformation (st.getData(), static_cast<int> (st.getSize()));
+        const auto back = q2->getTrainer().getSettings().analysis;
+        check (std::abs (back.frameRate - 200.0) < 1e-9 && ! back.trackPitch && ! back.sharpAttacks, "frame rate, pitch curve and sharp attacks are saved");
+
+        // Train on files, then inspect through the training list.
+        auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("pcs-inspect-test");
+        dir.deleteRecursively();
+        dir.createDirectory();
+        pcs::testgen::Options o;
+        o.duration = 1.2;
+        for (const char* family : { "flute", "reed", "pluck", "vowel" })
+            for (int v = 0; v < 2; ++v)
+            {
+                const auto clip = pcs::testgen::generate (family, v, o);
+                pcs::writeWav (dir.getChildFile (clip.name + ".wav").getFullPathName().toStdString(), clip.audio);
+            }
+        auto r = fresh();
+        auto& trainer = r->getTrainer();
+        trainer.addFiles ({ dir.getFullPathName() });
+        auto rs = trainer.getSettings();
+        rs.analysis.duration = 1.0;
+        rs.analysis.harmonics = 32;
+        trainer.setSettings (rs);
+        juce::String err;
+        const auto m = trainer.trainNow (err);
+        check (m != nullptr && m->hasPitchCurve && m->fitByComponents.size() == static_cast<size_t> (m->numComponents() + 1),
+               "a trained space has a pitch curve and a fit report");
+        auto& inspector = r->getInspector();
+        auto wait = [&inspector] {
+            for (int i = 0; i < 1200 && inspector.isBusy(); ++i)
+                juce::Thread::sleep (25);
+        };
+        inspector.inspect (m->soundIndex ("flute_1"));
+        wait();
+        const auto result = inspector.getResult();
+        check (result != nullptr && result->name == "flute_1" && result->original.numSamples() > 40000 && result->modelError < 6.0,
+               "the inspector renders a sound from its file and scores it");
+        inspector.evaluateAll();
+        wait();
+        bool all = true;
+        for (const auto& sc : inspector.getScores())
+            all = all && sc.done && sc.analysis > 0.0;
+        check (all && inspector.getScores().size() == 8, "Evaluate All scores every sound");
+
+        // Audition plays over silence, and stops.
+        if (result != nullptr)
+        {
+            r->audition (result->original);
+            juce::AudioBuffer<float> clipOut (2, 512);
+            juce::MidiBuffer none;
+            double level = 0.0;
+            for (int k = 0; k < 20; ++k)
+            {
+                clipOut.clear();
+                r->processBlock (clipOut, none);
+                level = std::max (level, static_cast<double> (clipOut.getMagnitude (0, 0, 512)));
+            }
+            r->stopAudition();
+            r->collectGarbage();
+            double after = 0.0;
+            for (int k = 0; k < 4; ++k)
+            {
+                clipOut.clear();
+                r->processBlock (clipOut, none);
+                r->collectGarbage();
+                after = std::max (after, static_cast<double> (clipOut.getMagnitude (0, 0, 512)));
+            }
+            check (level > 0.01 && after < 1e-9 && ! r->isAuditioning(), "audition plays a clip and stops");
+        }
+        dir.deleteRecursively();
+
+        // Components beyond 32 are part of the point and the state.
+        auto big = fresh();
+        PCASynthProcessor::Point far {};
+        far[0] = 1.0f;
+        far[50] = -2.5f;
+        big->setPoint (far);
+        juce::MemoryBlock bs;
+        big->getStateInformation (bs);
+        auto big2 = fresh();
+        big2->setStateInformation (bs.getData(), static_cast<int> (bs.getSize()));
+        check (std::abs (big2->getDetail()[50] + 2.5f) < 1e-6f, "components beyond 32 are saved");
+    }
+
     std::printf (failures == 0 ? "all plugin checks passed\n" : "%d plugin checks FAILED\n", failures);
     return failures == 0 ? 0 : 1;
 }

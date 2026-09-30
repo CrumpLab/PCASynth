@@ -40,8 +40,9 @@ private:
     juce::TextEditor title;
     juce::ComboBox note;
     juce::Slider duration, harmonics, floorDb, components, noiseBands;
-    juce::ToggleButton normalize { "Match loudness" }, trim { "Align onsets" }, partials { "Partial tuning" };
-    juce::ComboBox representation, pitchTracking;
+    juce::ToggleButton normalize { "Match loudness" }, trim { "Align onsets" }, partials { "Partial tuning" },
+        pitchCurve { "Pitch curve" }, sharpAttacks { "Sharp attacks" };
+    juce::ComboBox representation, pitchTracking, frameRate;
     std::vector<std::unique_ptr<juce::Label>> labels;
     double progressValue = 0.0;
     juce::ProgressBar progress { progressValue };

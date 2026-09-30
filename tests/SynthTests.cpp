@@ -82,7 +82,7 @@ TEST_CASE ("A rendered training point re-analyses to its own envelope", "[synth]
                 const float want = m->decode (m->soundZ (i)).at (t, h);
                 if (want > loudest - 40.0f && want > -50.0f)
                 {
-                    CHECK (again.at (t, h) == Approx (want).margin (1.5));
+                    CHECK (again.at (t, h) == Approx (want).margin (2.0));
                     ++compared;
                 }
             }

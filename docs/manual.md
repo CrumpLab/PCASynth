@@ -1,6 +1,6 @@
 # PCASynth manual
 
-Version 0.8.0 · [Matthew Crump](https://crumplab.com), Brooklyn College of CUNY
+Version 0.9.0 · [Matthew Crump](https://crumplab.com), Brooklyn College of CUNY
 
 PCASynth is a synthesizer that plays **a space of sounds learned from
 recordings**. Give it a set of notes from different instruments and it
@@ -21,23 +21,36 @@ see the [README](../README.md); for the design, see [plan.md](../plan.md).
 - [8. LFOs and expression](#8-lfos-and-expression)
 - [9. MPE (Osmose and other MPE controllers)](#9-mpe-osmose-and-other-mpe-controllers)
 - [10. Training your own space](#10-training-your-own-space)
-- [11. Files and projects](#11-files-and-projects)
-- [12. Performance](#12-performance)
-- [13. Troubleshooting](#13-troubleshooting)
-- [14. Parameter reference](#14-parameter-reference)
+- [11. Inspecting the model](#11-inspecting-the-model)
+- [12. Files and projects](#12-files-and-projects)
+- [13. Performance](#13-performance)
+- [14. Troubleshooting](#14-troubleshooting)
+- [15. Parameter reference](#15-parameter-reference)
 
 ---
 
 ## 1. How it works
 
-**Analysis.** Each training recording is one note. PCASynth measures, every
-10 ms, how loud each of its harmonics is (up to 64), plus:
+**Analysis.** Each training recording is one note. PCASynth runs a Fourier
+analysis every 10 ms and measures how loud each harmonic is (up to 128) at
+the note's pitch in that moment. Along with the levels it measures:
+- the pitch itself, frame by frame (vibrato, glides, pitch drops);
 - the level of the noise between the harmonics (breath, bow, hammer), in 16
   bands;
 - how far each partial sits from a perfect harmonic (the stretch of a piano
   or a bell).
 
 The sound becomes one long list of numbers: its *harmonic envelope*.
+
+This is a model of the sound, not a recording of it. It keeps what a sum of
+harmonics plus band noise can express: how the harmonics' levels change,
+the noise, and the pitch. It does not keep:
+- the waveform's phases or stereo image;
+- anything above the highest harmonic (harmonics × pitch);
+- transients that aren't harmonic, like the thump of a hammer or the click
+  of a key.
+
+§11 shows how to hear and measure what a space keeps.
 
 **The space.** Principal components analysis (PCA) finds the directions in
 which the training sounds differ most:
@@ -84,6 +97,8 @@ What this means in practice:
   can also drop a `.pcsm` file on the window.
 - **Factory Space**: go back to the built-in space.
 - **Train…**: open the training panel (§10).
+- **Inspect…**: see how faithfully the space reproduces its training sounds,
+  and listen to them side by side (§11).
 - **Export WAV…**: render the last note you played, at the current point
   and settings, to a stereo WAV file.
 - **Jump to**, **Centre**: go to a training sound, or to the average sound.
@@ -184,13 +199,17 @@ anywhere) and **Show Presets Folder**. To share a preset, send the
 - **Exaggerate** (0–3×): scales the whole point. 0 is the average sound; 1
   is the point as set; 2 is twice as far from the average. On a training
   sound, it gives a caricature of it.
-- **Components** (0–32): uses only the first K components. Fewer components
+- **Components** (0–64): uses only the first K components. Fewer components
   is a smoother, more generic version of the sound.
 - **Morph Time** (0–2 s): how quickly the sound glides when the point
   changes, whether by jumps, the morph pad or automation.
 - **Keytrack** (0–150 %): for spaces trained with pitch tracking (§10), how
   much each note takes on the timbre of its register. 0 plays every note
   with the timbre at the training pitch.
+- **Pitch Env** (0–200 %): how much of the learned pitch movement to play:
+  vibrato, glides, the pitch drop of a plucked string. 0 plays every note at
+  a steady pitch; 200 % doubles the vibrato. Only spaces trained with Pitch
+  curve on (the default since 0.9) have one.
 
 All 16 PC sliders are host parameters, so you can automate them.
 
@@ -355,12 +374,22 @@ unpitched sounds).
   the note by hand if it guesses an octave wrong.
 - **Duration**: seconds analysed from each onset. Longer sounds are cut;
   shorter ones fade to the floor.
-- **Harmonics**: how many harmonics to track (up to 64).
+- **Harmonics** (8–128, default 64): how many harmonics to track. This sets
+  the highest frequency the space keeps, harmonics × the note's pitch.
+
+  | Note | 64 harmonics reach | 128 harmonics reach |
+  |---|---|---|
+  | C2 (65 Hz) | 4.2 kHz | 8.4 kHz |
+  | C3 (131 Hz) | 8.4 kHz | 16.7 kHz |
+  | C4 (262 Hz) | 16.7 kHz | 20 kHz+ |
+
+  For notes below about C4, use 128, or the space sounds dull.
 - **Floor**: the quietest level kept, in dB. A higher floor makes the space
   care more about the shape of the audible harmonics than about which faint
   ones exist.
-- **Components**: how many to keep (at most one fewer than the number of
-  sounds).
+- **Components** (up to 64, default 64): how many to keep, at most one
+  fewer than the number of sounds. With as many components as that allows,
+  every training sound is reproduced exactly (up to the analysis).
 - **Normalize**: scale every sound so its loudest moment is at 0 dB
   (recommended: otherwise loudness dominates PC1).
 - **Trim onset**: line sounds up on their first sound.
@@ -382,6 +411,18 @@ unpitched sounds).
   **Keytrack** knob sets how much). *Auto* turns this on when the sounds
   span at least 3 semitones.
 
+**Fidelity:**
+- **Pitch curve** (on): follows the pitch frame by frame, so vibrato,
+  glides and pitch drops are learned, morphed and played (the **Pitch Env**
+  knob sets how much). Off, every sound plays at a steady pitch.
+- **Sharp attacks** (on): the first 150 ms are analysed with windows half as
+  long, which never reach back before the note starts. Plucks, mallets and
+  pianos keep their attack instead of starting with a soft or clicky smear.
+  The level in that stretch follows the waveform closely, so slow swells
+  keep their shape too.
+- **Frames**: 100 per second (default) or 200. At 200, faster changes
+  survive, but the model is twice the size.
+
 Click **Train**. Analysis runs in the background; you can keep playing. The
 new space replaces the current one and the point moves to its centre.
 - Changing settings or removing sounds retrains quickly, because analysed
@@ -396,8 +437,76 @@ new space replaces the current one and the point moves to its centre.
   (bowings, mutes, dynamics) for a detailed one.
 - Look at the map after training. Sounds that cluster together will morph
   smoothly; outliers take up the first components.
+- Then open **Inspect…** (§11) to hear whether each sound survived.
 
-## 11. Files and projects
+## 11. Inspecting the model
+
+![Inspect](screenshot-inspect.png)
+
+Click **Inspect…** to see and hear how faithfully the space reproduces its
+training sounds. Each sound can be heard in three versions:
+
+| Version | What it is | What it tells you |
+|---|---|---|
+| **Original** | the file, from its onset | the reference |
+| **Analysis** | the file's analysis played back as it is, with no PCA | what the harmonic model keeps |
+| **Model** | the sound's point in the space, played back | what you get when you play that sound |
+
+Differences between Original and Analysis come from the analysis:
+- too few harmonics;
+- transients the model can't represent;
+- a wrong pitch.
+
+Differences between Analysis and Model come from the PCA, which keeps too
+few components.
+
+**The list** (left) has every training sound with its scores. All scores
+are in dB: under 2 is close, 2–4 is noticeable, and above 4 is clearly
+different.
+- **fit**: how far the sound's harmonic envelopes are from their
+  reconstruction by the components. This is what the PCA loses, computed
+  when the space is trained, so it is always there.
+- **analysis** and **model**: spectral differences between the original and
+  the Analysis and Model versions (see below). These need the audio files.
+  **Evaluate All** scores every sound in the background; clicking a sound
+  scores just that one.
+
+**Fit vs components** (bottom left): the average fit error when only the
+first K components are used. The curve shows how many components the space
+needs; where it flattens, more components add little.
+
+**The sound** (right), for the selected sound:
+- Three spectrograms, one per version: time runs left to right, frequency
+  runs up on a log scale from 40 Hz, brighter is louder, 60 dB range.
+  Compare them for missing highs, smeared attacks or lost vibrato.
+- **Original / Analysis / Model** buttons play each version,
+  loudness-matched. **Stop** stops playback.
+- The pitch curves of the analysis and the model, in cents.
+- Scores for the whole sound and for its first 150 ms (the attack).
+  **PCA** compares the Analysis and Model versions directly.
+- **Components**: plays and scores the Model version with only the first K
+  components. Slide it down to hear what each component adds.
+- **Go to Sound** moves the point there.
+
+**The audio files** come from the training list (§10), which your project
+saves. A space loaded from a `.pcsm` file shows its fit scores without
+them. To hear and score its sounds, add the same files under **Train…**.
+
+**What to do about what you find:**
+
+| You see | Try |
+|---|---|
+| **analysis** high; the Analysis version is dull | more **Harmonics** (§10) |
+| **analysis** high only at the attack | **Sharp attacks** on; a thump or click that remains isn't harmonic and can't be modelled |
+| vibrato missing | **Pitch curve** on |
+| a wrong pitch; the Analysis version sounds wrong everywhere | set **Note** by hand |
+| **fit** or **model** high, **analysis** low | more **Components**, or fewer, more similar sounds |
+| one sound far worse than the rest | it may not be a single pitched note: check the file |
+
+`pcs-inspect` (in the source tools) prints the same scores for a model and a
+folder of files, and can write the three versions as WAVs.
+
+## 12. Files and projects
 
 | File | What it holds |
 |---|---|
@@ -409,31 +518,33 @@ A project or preset made with a custom space stores that space inside it (a
 few hundred KB to a few MB), so it opens on any computer. Projects using
 the factory space stay small.
 
-## 12. Performance
+## 13. Performance
 
 PCASynth runs its oscillators and noise filters as SIMD vectors (SSE or AVX
 on Intel, NEON on Apple Silicon). Voices with their own point (per-voice
-walks, velocity or MPE routing, spread) refresh it every ~3 ms.
+walks, velocity or MPE routing, spread) refresh it every ~3 ms. The pitch
+curve refreshes at the same rate.
 
 Typical load on one core of a 2020s laptop (48 kHz, factory space):
 
 | Situation | CPU |
 |---|---|
 | 8 notes, no noise | ~2 % |
-| 16 notes with noise | ~4–5 % |
+| 16 notes with noise | ~5 % |
 | 16 notes, random walk | ~6 % |
-| 16 notes, each walking on its own | ~7–8 % |
+| 16 notes, each walking on its own | ~8 % |
 | 32 MPE notes, each with its own point | ~14 % |
 
 To save CPU:
 - lower **Voices**;
 - lower **Harmonics** (high notes already drop inaudible ones);
 - set **Noise** to off;
+- set **Pitch Env** to 0 (no retuning);
 - avoid per-voice movement when you don't need it.
 
 `pcs-bench` (in the source tools) measures these cases on your machine.
 
-## 13. Troubleshooting
+## 14. Troubleshooting
 
 - **macOS says the plugin is damaged or blocks it.** Unsigned builds carry
   a quarantine flag. Run `xattr -dr com.apple.quarantine
@@ -453,11 +564,17 @@ To save CPU:
   - Some hosts need MPE enabled on the track as well.
 - **Training fails on a file.** It may be silent, very short, or unpitched
   (drums, noise). Each file must be a single pitched note.
-- **A trained space sounds odd.** Check detected pitches in the list, since
-  octave errors misplace harmonics; set **Note** by hand if they are wrong.
-  Try fewer components or a higher floor.
+- **A trained space doesn't sound like its recordings.** Open **Inspect…**
+  (§11). It shows whether the analysis or the PCA loses them, and what to
+  change. Also check:
+  - **Play Mode**: Loop plays the start and then loops a middle stretch;
+    compare in **One-shot**.
+  - **The note**: play each sound at the note it was recorded at, since
+    other notes get transposed timbre.
+  - **Detected pitches** in the training list: octave errors misplace every
+    harmonic.
 
-## 14. Parameter reference
+## 15. Parameter reference
 
 All of these are host parameters (automatable). SD = standard deviations in
 the space.
@@ -467,10 +584,11 @@ the space.
 | Parameter | Range | Default |
 |---|---|---|
 | PC1 … PC16 | ±4 SD | 0 |
-| Components Used | 0–32 | 32 |
+| Components Used | 0–64 | 64 |
 | Exaggerate | 0–3× | 1 |
 | Morph Time | 0–2 s | 0.05 s |
 | Keytrack | 0–150 % | 100 % |
+| Pitch Envelope | 0–200 % | 100 % |
 
 **Playback:**
 

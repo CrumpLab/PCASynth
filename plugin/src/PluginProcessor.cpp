@@ -29,6 +29,36 @@ PCASynthProcessor::~PCASynthProcessor()
     stopTimer();
     delete pending.exchange (nullptr);
     delete retired.exchange (nullptr);
+    delete pendingClip.exchange (nullptr);
+    delete retiredClip.exchange (nullptr);
+    delete playingClip;
+}
+
+void PCASynthProcessor::audition (const pcs::AudioBuffer& clip)
+{
+    if (clip.numSamples() == 0)
+        return;
+    // Resampled (linearly) to the rate the host plays at.
+    const double sr = getSampleRate() > 0.0 ? getSampleRate() : 48000.0;
+    const double step = clip.sampleRate / sr;
+    const auto& in = clip.channels[0];
+    auto c = std::make_unique<Clip>();
+    c->samples.resize (static_cast<size_t> (static_cast<double> (in.size()) / step));
+    for (size_t i = 0; i < c->samples.size(); ++i)
+    {
+        const double x = static_cast<double> (i) * step;
+        const auto k = static_cast<size_t> (x);
+        const double f = x - static_cast<double> (k);
+        const float a = in[std::min (k, in.size() - 1)], b = in[std::min (k + 1, in.size() - 1)];
+        c->samples[i] = static_cast<float> (a + f * (b - a));
+    }
+    delete pendingClip.exchange (c.release());
+    auditioning = true;
+}
+
+void PCASynthProcessor::stopAudition()
+{
+    delete pendingClip.exchange (new Clip()); // an empty clip replaces the playing one
 }
 
 std::shared_ptr<const pcs::Model> PCASynthProcessor::factoryModel()
@@ -508,6 +538,22 @@ void PCASynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
 
     synth.process (buffer.getArrayOfWritePointers(), buffer.getNumChannels(), buffer.getNumSamples(), events.data(),
                    static_cast<int> (events.size()));
+
+    // An audition clip (Inspect panel), over the synth.
+    if (retiredClip.load() == nullptr)
+        if (auto* c = pendingClip.exchange (nullptr))
+        {
+            retiredClip.store (playingClip);
+            playingClip = c;
+        }
+    if (playingClip != nullptr && playingClip->pos < playingClip->samples.size())
+    {
+        const int n = static_cast<int> (std::min<size_t> (static_cast<size_t> (buffer.getNumSamples()), playingClip->samples.size() - playingClip->pos));
+        for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+            buffer.addFrom (ch, 0, playingClip->samples.data() + playingClip->pos, n);
+        playingClip->pos += static_cast<size_t> (n);
+    }
+    auditioning.store (playingClip != nullptr && playingClip->pos < playingClip->samples.size(), std::memory_order_relaxed);
     activeVoices.store (synth.activeVoiceCount(), std::memory_order_relaxed);
     float positions[pcs::Synth::kMaxVoices];
     const int n = synth.voicePositions (positions, pcs::Synth::kMaxVoices);

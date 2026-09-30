@@ -6,12 +6,14 @@ of WAVs of different instruments all playing the same note. It learns the
 space those sounds span, and you play any point in that space: the training
 sounds themselves, morphs between them, or places no instrument has been.
 
-> **Status:** All eight stages are built (version 0.8.0): the engine, the
+> **Status:** All eight stages are built, plus Stage 9, fidelity and
+> inspection (version 0.9.0): the engine, the
 > offline tools, and a playable VST3 with its own UI. It trains new spaces
 > from your audio, moves through them (random walks, LFOs, expression),
 > takes MPE (aimed at the Osmose), and models noise, inharmonic partials and
 > pitch-dependent timbre. Stage 8 added presets, Level Lock, SIMD rendering,
-> a manual and the release process. What remains is playing it in a DAW and
+> a manual and the release process. Stage 9 added pitch curves, sharp
+> attacks, 64 components and the Inspect panel. What remains is playing it in a DAW and
 > on an Osmose, and a signed release (§5, Stage 8). Decisions are recorded
 > in §6. Licence: open source (AGPLv3, following JUCE's open-source
 > licence).
@@ -584,6 +586,90 @@ the plugin's options and state.
 - a signed, notarized release, which needs the Developer ID secrets and a
   tag;
 - listening in a DAW, and MPE on a real Osmose.
+
+### Stage 9: Fidelity and inspection — done, awaiting a listen on real samples
+
+Asked for after training on 60 real, diverse samples gave poor
+reproductions. There are two separate losses: the harmonic analysis and the
+PCA. Inspection came first, so each change could be measured.
+
+**Inspection:**
+- Engine `Inspect`:
+  - an ear-scale spectrogram (1/6 octave from 40 Hz, 100 frames/s);
+  - a level-independent spectral distance (dB RMS over cells within 60 dB
+    of each sound's peak);
+  - `inspectSound`: the original, the analysis played back without PCA,
+    and the model at the sound's point (optionally with K components),
+    each loudness-matched and scored whole and over the first 150 ms.
+- **Fit report**, computed at training and saved in the model: each
+  sound's harmonic-envelope error, and the mean error with the first K
+  components.
+- `pcs-inspect` CLI.
+- **Plugin Inspect panel:**
+  - a scored list and a fit-vs-components chart;
+  - three spectrograms with loudness-matched playback through the output
+    (audition clips, handed to the audio thread without allocating);
+  - pitch curves and a Components slider;
+  - a background `Inspector` that finds the files through the training
+    list.
+
+**Fidelity:**
+- **Pitch curve.**
+  - Each frame's pitch is the amplitude-weighted mean of its clear low
+    partials' peak frequencies, each divided by its place in the series.
+    It is tracked from the previous frame.
+  - A partial counts only if it stands 15 dB above the mean level halfway
+    to its neighbours; a frame counts only with two such partials (or one
+    30 dB proud). Without this, pure noise steered the pitch.
+  - Harmonics and noise bands (whose quiet-bin mask is scaled) are
+    measured where the partials are in each frame.
+  - The curve is a PCA section weighted so 10 cents in a frame counts like
+    1 dB on every harmonic of it. The synth decodes it at each voice's
+    position every refresh; the Pitch Env knob scales it.
+- **Sharp attacks.**
+  - Windows never reach back before the onset (a straddling window smears
+    the onset into a click), and the first 150 ms blend in a Hann window
+    half as long.
+  - Clamped windows measure a little *later* than their frame, so slow
+    swells came out too loud. The level in the attack therefore comes from
+    a one-period RMS (above 0.6 × f0) at the frame's time.
+  - The pre-roll is 1 ms instead of 5.
+- **Components:** up to 64 (`kMaxComponents`), and training keeps all the
+  sounds allow. The factory space keeps 32, so the binary stays at ~4 MB.
+- **Training options:** Pitch curve, Sharp attacks, Frames (100/200).
+
+**Measured on the 60 synthetic sounds** (spectral error vs the originals,
+dB):
+
+| | Before | After |
+|---|---|---|
+| Analysis only | 1.92 | 1.39 |
+| Analysis, first 150 ms | 3.63 | 3.25 |
+| Model, 32 components | 2.67 | 2.48 |
+| Model, all components | 2.67 | 1.39 |
+
+- Vibrato sounds gained most (vowel_1 3.2 → 0.6).
+- Percussive attacks improved (pluck 3.8 → 1.7) but stay the largest error
+  (mallet 6.4, epiano 8.5 at the attack). What remains there is
+  non-harmonic transient energy (thumps, clicks).
+- 200 frames/s showed no gain on this metric, whose own time resolution is
+  ~40 ms.
+- CPU rose ~5–10 % from retuning partials as the curve moves.
+
+**Suggested next** (inspection first, then fidelity):
+1. **Component explorer**: for PC k, show where in time and in which
+   harmonics its loading acts, and play −2/0/+2 SD. This answers "what
+   does PC3 do?".
+2. **Leave-one-out score**: how well the space predicts a training sound it
+   was not trained on, i.e. whether it generalises between sounds rather
+   than memorising them.
+3. **Export A/B**: write every sound's three versions as WAVs from the
+   plugin.
+4. **Transient layer**: keep each sound's non-harmonic onset residual
+   (original minus analysis, first ~100 ms) as a short sample, blended by
+   nearest training sounds. This targets the largest remaining error.
+5. Per-frame partial tuning (inharmonicity that changes over time), and
+   stereo.
 
 ## 6. Decisions
 

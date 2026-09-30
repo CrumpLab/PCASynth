@@ -26,7 +26,8 @@ TrainPanel::TrainPanel (PCASynthProcessor& p) : processor (p), trainer (p.getTra
     for (auto* c : std::initializer_list<juce::Component*> { &addFiles, &addFolder, &removeButton, &clearButton, &trainButton,
                                                             &closeButton, &hint, &status, &title, &note, &duration, &harmonics,
                                                             &floorDb, &components, &normalize, &trim, &progress, &noiseBands,
-                                                            &partials, &representation, &pitchTracking })
+                                                            &partials, &representation, &pitchTracking, &frameRate,
+                                                            &pitchCurve, &sharpAttacks })
         addAndMakeVisible (c);
 
     addFiles.onClick = [this] { chooseFiles (false); };
@@ -62,10 +63,12 @@ TrainPanel::TrainPanel (PCASynthProcessor& p) : processor (p), trainer (p.getTra
     setup (noiseBands, 0, 32, 1, "");
     representation.addItemList ({ "Decibels", "Shape + loudness", "Linear" }, 1);
     pitchTracking.addItemList ({ "Off", "Auto (3+ semitones)", "On" }, 1);
+    frameRate.addItem ("100 per second", 100);
+    frameRate.addItem ("200 per second (finer, larger model)", 200);
     title.setColour (juce::TextEditor::backgroundColourId, theme::background);
     title.setColour (juce::TextEditor::outlineColourId, theme::axis);
 
-    for (const auto* text : { "Name", "Note", "Duration", "Harmonics", "Floor", "Components", "Noise bands", "Levels as", "Pitch tracking" })
+    for (const auto* text : { "Name", "Note", "Duration", "Harmonics", "Floor", "Components", "Noise bands", "Levels as", "Pitch tracking", "Frames" })
     {
         auto l = std::make_unique<juce::Label> (juce::String(), text);
         l->setFont (theme::font (12.0f));
@@ -77,12 +80,17 @@ TrainPanel::TrainPanel (PCASynthProcessor& p) : processor (p), trainer (p.getTra
     controlsFromSettings();
     for (auto* s : { &duration, &harmonics, &floorDb, &components, &noiseBands })
         s->onValueChange = [this] { settingsFromControls(); };
-    note.onChange = representation.onChange = pitchTracking.onChange = [this] { settingsFromControls(); };
-    normalize.onClick = trim.onClick = partials.onClick = [this] { settingsFromControls(); };
+    note.onChange = representation.onChange = pitchTracking.onChange = frameRate.onChange = [this] { settingsFromControls(); };
+    normalize.onClick = trim.onClick = partials.onClick = pitchCurve.onClick = sharpAttacks.onClick = [this] { settingsFromControls(); };
     title.onTextChange = [this] { settingsFromControls(); };
 
     duration.setTooltip ("Seconds analysed from each sound's onset (longer sounds are cut, shorter ones fade to the floor)");
-    harmonics.setTooltip ("Harmonics tracked per sound");
+    harmonics.setTooltip ("Harmonics tracked per sound: the highest frequency kept is this times the note's pitch "
+                          "(64 at C2 reaches only 4 kHz; use 128 for low notes)");
+    frameRate.setTooltip ("Envelope frames per second. 200 follows fast changes more closely; the model doubles in size");
+    pitchCurve.setTooltip ("Follow the pitch frame by frame: vibrato, glides and pitch drops are learned and played "
+                           "(Pitch Env sets how much)");
+    sharpAttacks.setTooltip ("Analyse onsets with a shorter window that doesn't reach back before the sound: crisper attacks");
     floorDb.setTooltip ("Quietest level kept. Higher floors weigh the audible harmonics' shape more than which harmonics exist");
     components.setTooltip ("Principal components kept (at most one fewer than the number of sounds)");
     normalize.setTooltip ("Scale every sound so its loudest moment is at 0 dB");
@@ -111,6 +119,9 @@ void TrainPanel::controlsFromSettings()
     partials.setToggleState (s.analysis.trackPartials, juce::dontSendNotification);
     representation.setSelectedId (static_cast<int> (s.analysis.representation) + 1, juce::dontSendNotification);
     pitchTracking.setSelectedId (static_cast<int> (s.analysis.pitchTracking) + 1, juce::dontSendNotification);
+    frameRate.setSelectedId (s.analysis.frameRate > 150.0 ? 200 : 100, juce::dontSendNotification);
+    pitchCurve.setToggleState (s.analysis.trackPitch, juce::dontSendNotification);
+    sharpAttacks.setToggleState (s.analysis.sharpAttacks, juce::dontSendNotification);
 }
 
 void TrainPanel::settingsFromControls()
@@ -130,6 +141,9 @@ void TrainPanel::settingsFromControls()
     s.analysis.trackPartials = partials.getToggleState();
     s.analysis.representation = static_cast<pcs::Representation> (juce::jmax (0, representation.getSelectedId() - 1));
     s.analysis.pitchTracking = static_cast<pcs::PitchTracking> (juce::jmax (0, pitchTracking.getSelectedId() - 1));
+    s.analysis.frameRate = frameRate.getSelectedId() == 200 ? 200.0 : 100.0;
+    s.analysis.trackPitch = pitchCurve.getToggleState();
+    s.analysis.sharpAttacks = sharpAttacks.getToggleState();
     trainer.setSettings (s);
 }
 
@@ -242,7 +256,7 @@ void TrainPanel::resized()
 
     // Right: settings, then Train.
     auto row = [&right] { auto x = right.removeFromTop (24); right.removeFromTop (3); return x; };
-    juce::Component* controls[] = { &title, &note, &duration, &harmonics, &floorDb, &components, &noiseBands, &representation, &pitchTracking };
+    juce::Component* controls[] = { &title, &note, &duration, &harmonics, &floorDb, &components, &noiseBands, &representation, &pitchTracking, &frameRate };
     for (size_t i = 0; i < labels.size(); ++i)
     {
         auto x = row();
@@ -255,6 +269,10 @@ void TrainPanel::resized()
     normalize.setBounds (toggles.removeFromLeft (third));
     trim.setBounds (toggles.removeFromLeft (third));
     partials.setBounds (toggles);
+    auto toggles2 = row();
+    toggles2.removeFromLeft (88);
+    pitchCurve.setBounds (toggles2.removeFromLeft (third));
+    sharpAttacks.setBounds (toggles2.removeFromLeft (third + 20));
     right.removeFromTop (4);
     auto trainRow = right.removeFromTop (30);
     trainButton.setBounds (trainRow.removeFromLeft (120));

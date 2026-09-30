@@ -10,6 +10,7 @@ FetchContent_MakeAvailable(nlohmann_json)
 add_library(pcs_engine STATIC
     src/Fft.cpp
     src/Harmonic.cpp
+    src/Inspect.cpp
     src/Model.cpp
     src/Modulation.cpp
     src/Pca.cpp

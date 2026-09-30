@@ -10,7 +10,7 @@
 
 namespace pcs {
 
-constexpr int kMaxComponents = 32;
+constexpr int kMaxComponents = 64;
 constexpr int kMaxModelHarmonics = 128;
 
 // A trained PCA sound space: the mean sound plus principal components, and
@@ -23,6 +23,7 @@ constexpr int kMaxModelHarmonics = 128;
 //   loudness   numFrames                   (ShapeLoudness only) frame loudness × loudnessWeight
 //   noise      numFrames × numNoiseBands   residual noise per band, same representation
 //   partials   numHarmonics                (if hasPartials) cents from exact harmonics × partialWeight
+//   pitch      numFrames                   (if hasPitchCurve) each frame's pitch, cents from f0 × pitchCurveWeight
 // With pitch tracking, a direction (pitchSlope, per semitone) is regressed out
 // before the PCA and added back for each note: timbre follows pitch.
 struct Model
@@ -36,6 +37,8 @@ struct Model
     Representation representation = Representation::Decibels;
     float loudnessWeight = 1.0f;
     float partialWeight = 1.0f;
+    bool hasPitchCurve = false;
+    float pitchCurveWeight = 1.0f;
     double frameRate = 100.0;
     float floorDb = -80.0f;
     float noiseCeilingDb = 0.0f;    // decoded noise is clamped here: the loudest noise in training + 6 dB
@@ -54,7 +57,15 @@ struct Model
     int loudnessOffset() const noexcept { return numFrames * numHarmonics; }
     int noiseOffset() const noexcept { return loudnessOffset() + (representation == Representation::ShapeLoudness ? numFrames : 0); }
     int partialOffset() const noexcept { return noiseOffset() + numFrames * numNoiseBands; }
-    int dims() const noexcept { return partialOffset() + (hasPartials ? numHarmonics : 0); }
+    int pitchCurveOffset() const noexcept { return partialOffset() + (hasPartials ? numHarmonics : 0); }
+    int dims() const noexcept { return pitchCurveOffset() + (hasPitchCurve ? numFrames : 0); }
+
+    // How well the components reproduce the training sounds, from training:
+    // the RMS difference (dB) between each sound's harmonic envelopes and its
+    // reconstruction from all the components (fitErrorDb, per sound), and the
+    // mean over sounds with the first K components (fitByComponents[K], K =
+    // 0..numComponents). Empty for models trained before they existed.
+    std::vector<float> fitErrorDb, fitByComponents;
 
     int numSounds() const noexcept { return static_cast<int> (names.size()); }
     int numComponents() const noexcept { return pca.numComponents; }
@@ -82,8 +93,10 @@ struct Model
     void decodeFrame (int frame, const float* z, int numZ, float* outDb, float pitchDelta = 0.0f) const noexcept;
     // ... noise band levels (dB RMS, clamped) of `frame` (numNoiseBands values) ...
     void decodeNoiseFrame (int frame, const float* z, int numZ, float* outDb, float pitchDelta = 0.0f) const noexcept;
-    // ... and partial offsets in cents (numHarmonics values; zeros without partials).
+    // ... partial offsets in cents (numHarmonics values; zeros without partials) ...
     void decodePartials (const float* z, int numZ, float* outCents, float pitchDelta = 0.0f) const noexcept;
+    // ... and the pitch in `frame`, cents from the fundamental (0 without a pitch curve).
+    float decodePitch (int frame, const float* z, int numZ, float pitchDelta = 0.0f) const noexcept;
     // The whole sound at `z`.
     HarmonicSound decode (const std::vector<float>& z, float pitchDelta = 0.0f) const;
 

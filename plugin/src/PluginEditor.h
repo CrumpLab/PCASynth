@@ -2,6 +2,7 @@
 
 #include "Controls.h"
 #include "EnvelopeView.h"
+#include "InspectPanel.h"
 #include "MorphPad.h"
 #include "ParamGrid.h"
 #include "PluginProcessor.h"
@@ -38,6 +39,9 @@ public:
     MorphPad& getMorphPad() noexcept { return morphPad; }
     EnvelopeView& getEnvelopeView() noexcept { return envelope; }
     TrainPanel& getTrainPanel() noexcept { return trainPanel; }
+    InspectPanel& getInspectPanel() noexcept { return inspectPanel; }
+    void showInspector (bool show);
+    void showTraining (bool show);
     PresetBar& getPresetBar() noexcept { return presetBar; }
     void selectTab (int index) { showTab (index); }
 
@@ -47,14 +51,13 @@ private:
     void chooseModelFile();
     void chooseExportFile();
     void chooseSaveFile();
-    void showTraining (bool show);
     void showMessage (const juce::String& text);
 
     PCASynthProcessor& processor;
     theme::LookAndFeel lookAndFeel;
     juce::TooltipWindow tooltips { this, 600 };
     juce::TextButton loadButton { "Load Model..." }, factoryButton { "Factory Space" }, exportButton { "Export WAV..." },
-        meanButton { "Centre" }, trainToggle { "Train..." }, saveButton { "Save Model..." };
+        meanButton { "Centre" }, trainToggle { "Train..." }, inspectToggle { "Inspect..." }, saveButton { "Save Model..." };
     juce::Label title, modelInfo, jumpLabel { {}, "Jump to" }, status;
     juce::ComboBox soundBox;
     PresetBar presetBar;
@@ -64,6 +67,8 @@ private:
     ComponentStrip strip;
     ControlPanel controls;
     TrainPanel trainPanel;
+    InspectPanel inspectPanel;
+    void updateVisibility(); // the main views, or the Train / Inspect panel over them
     WalkPanel walkPanel;
     ModPanel modPanel;
     MpePanel mpePanel;

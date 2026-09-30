@@ -23,12 +23,15 @@ void usage()
                  "  --duration S      seconds analysed from each onset (default 4)\n"
                  "  --harmonics H     harmonics tracked (default 64, max 128)\n"
                  "  --frame-rate R    envelope frames per second (default 100)\n"
-                 "  --components K    components kept (default 32, max 32)\n"
+                 "  --components K    components kept (default 64, max 64)\n"
                  "  --floor-db D      level floor in dB (default -80)\n"
                  "  --noise-bands N   residual noise bands (default 16; 0 = harmonics only)\n"
                  "  --no-partials     treat partials as exact harmonics (no inharmonicity)\n"
                  "  --representation R  db | shape | linear (default db)\n"
                  "  --pitch-tracking P  auto | on | off (default auto: on when sounds span 3+ semitones)\n"
+                 "  --no-pitch-curve  don't follow the pitch frame by frame (vibrato, glides)\n"
+                 "  --no-sharp-attacks  analyse onsets with the same long window as the rest\n"
+                 "  --attack S        length of the sharp-attack part (default 0.15 s)\n"
                  "  --no-normalize    keep each sound's own loudness\n"
                  "  --no-trim         don't align sounds on their onsets\n";
 }
@@ -57,6 +60,9 @@ int main (int argc, char** argv)
         else if (a == "--duration") s.duration = std::stod (next());
         else if (a == "--harmonics") s.harmonics = std::stoi (next());
         else if (a == "--frame-rate") s.frameRate = std::stod (next());
+        else if (a == "--no-pitch-curve") s.trackPitch = false;
+        else if (a == "--no-sharp-attacks") s.sharpAttacks = false;
+        else if (a == "--attack") s.attackSeconds = std::stod (next());
         else if (a == "--components") components = std::stoi (next());
         else if (a == "--floor-db") s.floorDb = std::stod (next());
         else if (a == "--noise-bands") s.noiseBands = std::stoi (next());

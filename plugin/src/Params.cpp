@@ -176,6 +176,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
 
     // Stage 8: every point near the training sounds' loudness (walks without level jumps).
     addPercent (l, id::levelLock, "Level Lock", 1.0f);
+    // The learned pitch curve: vibrato, glides, pitch drops (models that have one).
+    l.add (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { id::pitchEnv, 1 }, "Pitch Envelope",
+                                                        juce::NormalisableRange<float> (0.0f, 2.0f), 1.0f, percent()));
     return l;
 }
 
@@ -234,6 +237,7 @@ ParamReader::ParamReader (juce::AudioProcessorValueTreeState& s)
     noise = s.getRawParameterValue (id::noise);
     keytrack = s.getRawParameterValue (id::keytrack);
     levelLock = s.getRawParameterValue (id::levelLock);
+    pitchEnv = s.getRawParameterValue (id::pitchEnv);
     for (int n = 0; n < 2; ++n)
         lfos[static_cast<size_t> (n)] = { s.getRawParameterValue (id::lfo (n, "on")), s.getRawParameterValue (id::lfo (n, "shape")),
                                           s.getRawParameterValue (id::lfo (n, "rate")), s.getRawParameterValue (id::lfo (n, "sync")),
@@ -310,6 +314,7 @@ pcs::SynthParams ParamReader::read (const std::array<float, pcs::kMaxComponents>
     p.noiseDb = get (noise);
     p.keytrack = get (keytrack);
     p.levelLock = get (levelLock);
+    p.pitchEnvelope = get (pitchEnv);
     return p;
 }
 

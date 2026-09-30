@@ -19,7 +19,7 @@ int main (int argc, char** argv)
 {
     if (argc < 2)
     {
-        std::printf ("usage: pcs-ui-snapshot out.png [width height] [sound | preset:NAME | train | walk | mod | mpe] [morph-u morph-v]\n");
+        std::printf ("usage: pcs-ui-snapshot out.png [width height] [sound | preset:NAME | train | inspect [sound] | walk | mod | mpe] [morph-u morph-v]\n");
         return 1;
     }
     juce::ScopedJuceInitialiser_GUI gui;
@@ -58,10 +58,31 @@ int main (int argc, char** argv)
         juce::String error;
         trainer.trainNow (error);
         ed->refreshModel();
-        ed->getTrainPanel().setVisible (true);
-        ed->getSoundMap().setVisible (false);
-        ed->getMorphPad().setVisible (false);
-        ed->getEnvelopeView().setVisible (false);
+        ed->showTraining (true);
+        dir.deleteRecursively();
+    }
+    else if (argc > 4 && juce::String (argv[4]) == "inspect")
+    {
+        // The factory space's training files, listed for training, every sound
+        // scored, then one inspected.
+        auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("pcs-snapshot-inspect");
+        dir.deleteRecursively();
+        dir.createDirectory();
+        for (const auto& clip : pcs::testgen::generateTrainingSet ({}))
+            pcs::writeWav (dir.getChildFile (clip.name + ".wav").getFullPathName().toStdString(), clip.audio);
+        processor.getTrainer().addFiles ({ dir.getFullPathName() });
+        ed->showInspector (true);
+        auto& inspector = processor.getInspector();
+        inspector.evaluateAll();
+        const juce::String sound = argc > 5 ? argv[5] : "vowel_2";
+        auto wait = [&inspector] {
+            for (int i = 0; i < 1200 && inspector.isBusy(); ++i)
+                juce::Thread::sleep (50);
+        };
+        wait();
+        ed->getInspectPanel().selectSound (processor.getModel()->soundIndex (sound.toStdString()));
+        wait();
+        ed->getInspectPanel().refresh();
         dir.deleteRecursively();
     }
     else if (argc > 6)

@@ -5,7 +5,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 // Host parameters. PC1..PC16 are the point in the space (SD units); the
-// remaining components (17..32) are "detail" kept in the plugin state and set
+// remaining components (17..64) are "detail" kept in the plugin state and set
 // when you jump to a training sound.
 namespace pcsplugin {
 
@@ -35,7 +35,7 @@ inline const juce::String components = "components", exaggerate = "exaggerate", 
                           // Stage 7
                           noise = "noise", keytrack = "keytrack",
                           // Stage 8
-                          levelLock = "level_lock";
+                          levelLock = "level_lock", pitchEnv = "pitch_env";
 inline juce::String lfo (int n, const char* what) { return "lfo" + juce::String (n + 1) + "_" + what; }
 }
 
@@ -59,7 +59,7 @@ class ParamReader
 {
 public:
     explicit ParamReader (juce::AudioProcessorValueTreeState& state);
-    // `detail` supplies components 17..32.
+    // `detail` supplies components 17..64.
     pcs::SynthParams read (const std::array<float, pcs::kMaxComponents>& detail) const noexcept;
 
 private:
@@ -70,7 +70,7 @@ private:
         *walkFocus, *walkPerVoice, *walkSeed, *walkRestart, *walkFreeze, *velDest, *velAmount, *mwDest, *mwAmount, *atDest,
         *atAmount, *macro, *voiceSpread;
     std::atomic<float>*mpeOn, *mpeZone, *mpeBendRange, *mpePressDest, *mpePressAmount, *mpePressCurve, *mpeSmoothing,
-        *mpeSlideDest, *mpeSlideAmount, *mpeSlideMode, *noise, *keytrack, *levelLock;
+        *mpeSlideDest, *mpeSlideAmount, *mpeSlideMode, *noise, *keytrack, *levelLock, *pitchEnv;
     struct LfoRefs
     {
         std::atomic<float>*on, *shape, *rate, *sync, *syncLen, *depth, *target;

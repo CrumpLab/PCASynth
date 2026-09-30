@@ -53,6 +53,7 @@ jobs:
           xvfb-run -a build/plugin/pcs-ui-snapshot ui/editor-walk.png 1180 840 walk
           xvfb-run -a build/plugin/pcs-ui-snapshot ui/editor-mod.png 1180 840 mod
           xvfb-run -a build/plugin/pcs-ui-snapshot ui/editor-mpe.png 1180 840 mpe
+          xvfb-run -a build/plugin/pcs-ui-snapshot ui/editor-inspect.png 1180 840 inspect vowel_2
 
       - name: Train on the synthetic set and render examples
         run: scripts/render_examples.sh build renders
@@ -63,6 +64,7 @@ jobs:
           path: |
             renders/examples
             renders/training.txt
+            renders/inspect.txt
             renders/synthetic.pcsm
             renders/synthetic.pcsm.scores.csv
           retention-days: 14

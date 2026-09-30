@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Params.h"
+#include "Inspector.h"
 #include "Trainer.h"
 
 #include "pcs/Model.h"
@@ -70,7 +71,7 @@ public:
     Trainer& getTrainer() noexcept { return trainer; }
 
     // The point in the space: PC1..16 parameters plus the detail components
-    // 17..32. setPoint writes all of them (PCs clamped to ±4); wrap drags in
+    // 17..64. setPoint writes all of them (PCs clamped to ±4); wrap drags in
     // begin/endPointGesture so hosts record one automation gesture.
     using Point = std::array<float, pcs::kMaxComponents>;
     Point getPoint() const;
@@ -126,12 +127,23 @@ public:
     juce::String loadPresetFile (const juce::File& file);
     juce::String getPresetName() const { return getUiValue ("presetName", "").toString(); }
 
+    // ---- inspection (message thread) ----
+    Inspector& getInspector() noexcept { return inspector; }
+    // Plays a mono clip through the output, over the synth, once (A/B listening).
+    void audition (const pcs::AudioBuffer& clip);
+    void stopAudition();
+    bool isAuditioning() const noexcept { return auditioning.load(); }
+
     // Editor settings saved with the state (map axes, morph corners, ...).
     juce::var getUiValue (const juce::Identifier& key, const juce::var& fallback) const;
     void setUiValue (const juce::Identifier& key, const juce::var& value);
 
     // Frees a model the audio thread has let go of (the timer calls this).
-    void collectGarbage() { delete retired.exchange (nullptr); }
+    void collectGarbage()
+    {
+        delete retired.exchange (nullptr);
+        delete retiredClip.exchange (nullptr);
+    }
     // Applies MPE setup the controller sent (zone, bend range) to the parameters (the timer calls this).
     void applyControllerSetup();
 
@@ -152,6 +164,16 @@ private:
     // `pending`; the audio thread swaps it in and parks the old one in
     // `retired`, which the timer frees.
     std::atomic<pcs::Synth::ModelSlot*> pending { nullptr }, retired { nullptr };
+
+    // Audition clips, handed over the same way; the audio thread owns `playingClip`.
+    struct Clip
+    {
+        std::vector<float> samples;
+        size_t pos = 0;
+    };
+    std::atomic<Clip*> pendingClip { nullptr }, retiredClip { nullptr };
+    Clip* playingClip = nullptr;
+    std::atomic<bool> auditioning { false };
 
     mutable std::mutex modelLock;
     std::shared_ptr<const pcs::Model> model;
@@ -190,11 +212,13 @@ private:
     void resolveDirection();
     std::shared_ptr<std::atomic<bool>> alive = std::make_shared<std::atomic<bool>> (true);
 
-    // Last: destroyed first, so its thread stops before anything it calls back into.
+    // Last: destroyed first, so their threads stop before anything they call back into.
     Trainer trainer { [this] (std::shared_ptr<const pcs::Model> m) {
         setModel (std::move (m), false);
         resetToMean();
     } };
+    // After the trainer, so it is destroyed (and its thread stopped) first.
+    Inspector inspector { [this] { return getModel(); }, [this] (const juce::String& name) { return trainer.fileFor (name); } };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PCASynthProcessor)
 };

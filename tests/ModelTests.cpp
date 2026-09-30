@@ -139,7 +139,8 @@ TEST_CASE ("Every representation reproduces its training sounds: harmonics, nois
         auto s = smallSettings();
         s.representation = rep;
         const auto m = trainModel (sounds, s);
-        CHECK (m.dims() == m.numFrames * (24 + 16) + (rep == Representation::ShapeLoudness ? m.numFrames : 0) + 24);
+        CHECK (m.hasPitchCurve);
+        CHECK (m.dims() == m.numFrames * (24 + 16) + (rep == Representation::ShapeLoudness ? m.numFrames : 0) + 24 + m.numFrames);
         for (int i : { 0, 7, 13 })
         {
             const auto& want = sounds[static_cast<size_t> (i)];
@@ -170,6 +171,7 @@ TEST_CASE ("Version 1 model files still load", "[model][stage7]")
     auto s = smallSettings();
     s.noiseBands = 0;
     s.trackPartials = false;
+    s.trackPitch = false;
     std::vector<HarmonicSound> sounds;
     testgen::Options o;
     o.duration = 1.2;

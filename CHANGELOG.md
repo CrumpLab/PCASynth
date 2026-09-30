@@ -1,5 +1,67 @@
 # Changelog
 
+## [0.9.0] - 2026-09-30
+
+### Fidelity and inspection
+- **Inspect panel** (new **Inspect…** button). It shows how faithfully the
+  space reproduces each training sound, and where fidelity is lost:
+  - scores for every sound: fit (PCA), analysis and model;
+  - three spectrograms for the selected sound (Original, Analysis without
+    PCA, Model), each with a play button (loudness-matched A/B);
+  - the analysed and modelled pitch curves;
+  - a chart of fit against the number of components;
+  - a Components slider that plays the model with only the first K
+    components.
+- **Pitch curves.** Analysis now follows the pitch frame by frame: each
+  frame's pitch comes from its clear partials, tracked from the previous
+  frame, with pure noise ignored. Harmonics and noise bands are measured
+  where the partials actually are. The curve is a new section of the PCA
+  vector, so vibrato, glides and pitch drops are learned, morphed and
+  played. New **Pitch Env** knob (0–200 %).
+- **Sharp attacks.** The first 150 ms are analysed with windows half as
+  long that never reach back before the note starts. Their level follows a
+  one-period RMS of the waveform, so percussive onsets stay crisp and slow
+  swells keep their shape.
+- **Up to 64 components** (was 32), and training keeps as many as the
+  sounds allow. With 60 sounds, every training sound is reproduced up to
+  its analysis.
+- **Fit report**, computed at training and saved in the model: each
+  sound's harmonic-envelope error, and the mean error with the first K
+  components.
+- **Training options:** Pitch curve, Sharp attacks, Frames (100 or 200 per
+  second). The Harmonics tooltip explains the frequency ceiling.
+- **Tools:** new `pcs-inspect` (per-sound scores, with optional WAVs of the
+  three versions). `pcs-train --no-pitch-curve --no-sharp-attacks
+  --attack`.
+- Model file format 3; versions 1 and 2 still load and re-analyse as they
+  were trained.
+
+Measured on the 60 synthetic training sounds (spectral error vs the
+originals, dB, lower is better):
+
+| | Before | After |
+|---|---|---|
+| Analysis only | 1.92 | 1.39 |
+| Analysis, first 150 ms | 3.63 | 3.25 |
+| Model, 32 components | 2.67 | 2.48 |
+| Model, all components | 2.67 | 1.39 |
+
+The biggest gains:
+
+| Sound | Before | After |
+|---|---|---|
+| vowel_1 (vibrato) | 3.2 | 0.6 |
+| bowed_1 (vibrato) | 1.5 | 0.7 |
+| pluck_1, attack | 3.8 | 1.7 |
+| mallet_1, attack | 8.4 | 6.4 |
+
+### Fixed
+- A new note could keep a sliver of the pitch computed before a restarted
+  walk had moved the point, so repeated phrases weren't identical.
+
+### Changed
+- The factory space keeps 32 components (the plugin binary stays small).
+
 ## [0.8.0] - 2026-09-30
 
 ### Stage 8: polish and release

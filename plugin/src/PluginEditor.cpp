@@ -6,7 +6,7 @@ constexpr int kDefaultWidth = 1180, kDefaultHeight = 840;
 } // namespace
 
 PCASynthEditor::PCASynthEditor (PCASynthProcessor& p)
-    : AudioProcessorEditor (p), processor (p), presetBar (p), soundMap (p), morphPad (p), envelope (p), strip (p), controls (p), trainPanel (p), walkPanel (p), modPanel (p), mpePanel (p)
+    : AudioProcessorEditor (p), processor (p), presetBar (p), soundMap (p), morphPad (p), envelope (p), strip (p), controls (p), trainPanel (p), inspectPanel (p), walkPanel (p), modPanel (p), mpePanel (p)
 {
     setLookAndFeel (&lookAndFeel);
     title.setText ("PCASynth", juce::dontSendNotification);
@@ -17,9 +17,10 @@ PCASynthEditor::PCASynthEditor (PCASynthProcessor& p)
     status.setJustificationType (juce::Justification::centredRight);
     for (auto* c : std::initializer_list<juce::Component*> { &title, &modelInfo, &jumpLabel, &status, &loadButton, &factoryButton,
                                                             &exportButton, &meanButton, &soundBox, &presetBar, &soundMap, &morphPad,
-                                                            &envelope, &strip, &controls, &trainToggle, &saveButton })
+                                                            &envelope, &strip, &controls, &trainToggle, &inspectToggle, &saveButton })
         addAndMakeVisible (c);
     addChildComponent (trainPanel);
+    addChildComponent (inspectPanel);
     addChildComponent (walkPanel);
     addChildComponent (modPanel);
     addChildComponent (mpePanel);
@@ -39,6 +40,11 @@ PCASynthEditor::PCASynthEditor (PCASynthProcessor& p)
     trainToggle.onClick = [this] { showTraining (trainToggle.getToggleState()); };
     saveButton.setTooltip ("Save the current space as a .pcsm file");
     saveButton.onClick = [this] { chooseSaveFile(); };
+    inspectToggle.setClickingTogglesState (true);
+    inspectToggle.setTooltip ("How faithfully the model reproduces its training sounds: scores, spectrograms, "
+                              "and the original / analysis / model side by side");
+    inspectToggle.onClick = [this] { showInspector (inspectToggle.getToggleState()); };
+    inspectPanel.onClose = [this] { showInspector (false); };
     showTraining (static_cast<bool> (processor.getUiValue ("showTraining", false)));
 
     loadButton.setTooltip ("Load a .pcsm model (or drop one on the window)");
@@ -79,6 +85,7 @@ PCASynthEditor::~PCASynthEditor()
 void PCASynthEditor::refreshModel()
 {
     presetBar.refresh();
+    inspectPanel.refresh();
     const auto m = processor.getModel();
     soundBox.clear (juce::dontSendNotification);
     soundMap.setModel (m);
@@ -120,20 +127,48 @@ void PCASynthEditor::showTab (int index)
 {
     index = juce::jlimit (0, static_cast<int> (tabs.size()) - 1, index);
     tabs[static_cast<size_t> (index)].setToggleState (true, juce::dontSendNotification);
-    strip.setVisible (index == 0);
-    walkPanel.setVisible (index == 1);
-    modPanel.setVisible (index == 2);
-    mpePanel.setVisible (index == 3);
     processor.setUiValue ("tab", index);
+    updateVisibility();
 }
 
 void PCASynthEditor::showTraining (bool show)
 {
     trainToggle.setToggleState (show, juce::dontSendNotification);
-    trainPanel.setVisible (show);
-    for (auto* c : std::initializer_list<juce::Component*> { &soundMap, &morphPad, &envelope })
-        c->setVisible (! show);
+    if (show)
+        inspectToggle.setToggleState (false, juce::dontSendNotification);
     processor.setUiValue ("showTraining", show);
+    updateVisibility();
+}
+
+void PCASynthEditor::showInspector (bool show)
+{
+    inspectToggle.setToggleState (show, juce::dontSendNotification);
+    if (show)
+    {
+        trainToggle.setToggleState (false, juce::dontSendNotification);
+        processor.setUiValue ("showTraining", false);
+        inspectPanel.refresh();
+    }
+    else
+        processor.stopAudition();
+    updateVisibility();
+}
+
+void PCASynthEditor::updateVisibility()
+{
+    const bool training = trainToggle.getToggleState(), inspecting = inspectToggle.getToggleState();
+    const bool main = ! training && ! inspecting;
+    trainPanel.setVisible (training);
+    inspectPanel.setVisible (inspecting);
+    for (auto* c : std::initializer_list<juce::Component*> { &soundMap, &morphPad, &envelope })
+        c->setVisible (main);
+    for (auto& t : tabs)
+        t.setVisible (main);
+    const int tab = static_cast<int> (processor.getUiValue ("tab", 0));
+    strip.setVisible (main && tab == 0);
+    walkPanel.setVisible (main && tab == 1);
+    modPanel.setVisible (main && tab == 2);
+    mpePanel.setVisible (main && tab == 3);
 }
 
 void PCASynthEditor::chooseSaveFile()
@@ -287,10 +322,11 @@ void PCASynthEditor::resized()
     saveButton.setBounds (row1.removeFromLeft (112).reduced (2));
     factoryButton.setBounds (row1.removeFromLeft (112).reduced (2));
     trainToggle.setBounds (row1.removeFromLeft (84).reduced (2));
+    inspectToggle.setBounds (row1.removeFromLeft (90).reduced (2));
     exportButton.setBounds (row1.removeFromLeft (112).reduced (2));
     row1.removeFromLeft (16);
     jumpLabel.setBounds (row1.removeFromLeft (56));
-    soundBox.setBounds (row1.removeFromLeft (200).reduced (2));
+    soundBox.setBounds (row1.removeFromLeft (180).reduced (2));
     meanButton.setBounds (row1.removeFromLeft (80).reduced (2));
     status.setBounds (row1);
     bar.removeFromTop (6);
@@ -315,7 +351,9 @@ void PCASynthEditor::resized()
     mpePanel.setBounds (r);
     controls.setBounds (controlsArea);
 
-    trainPanel.setBounds (top);
+    // Training and inspecting take the map row and the tab area.
+    trainPanel.setBounds (top.getUnion (strip.getBounds()).withTop (top.getY()));
+    inspectPanel.setBounds (trainPanel.getBounds());
     const int mapW = juce::jmin (top.getHeight() + 30, top.getWidth() * 36 / 100);
     soundMap.setBounds (top.removeFromLeft (mapW));
     top.removeFromLeft (gap);

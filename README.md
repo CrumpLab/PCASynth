@@ -13,16 +13,18 @@ bank of sine oscillators, so any pitch plays the learned timbre. See
 
 By [Matthew Crump](https://crumplab.com), Brooklyn College of CUNY.
 
-**Status: version 0.8.0 (all eight planned stages).** A playable VST3
+**Status: version 0.9.0.** A playable VST3
 (plus a Standalone app) with its own UI:
 - a map of the sound space, a four-corner morph pad, a live view of the
   sound;
 - factory and user presets;
-- training on your own audio;
+- training on your own audio, and an **Inspect** panel that shows and
+  plays how faithfully the space reproduces each sound;
 - random walks, LFOs and expression;
 - MPE for controllers such as the Osmose;
 - a richer sound model: breath and bow noise, inharmonic (piano-like)
-  partials, and timbre that follows pitch when trained on several notes.
+  partials, pitch curves (vibrato, glides), crisp attacks, and timbre that
+  follows pitch when trained on several notes.
 
 It has not yet been played in a DAW or on an Osmose.
 
@@ -163,6 +165,20 @@ With MPE off, the plugin behaves as an ordinary synth.
   and it learns how timbre changes with pitch. Each note then gets its
   register's timbre; the **Keytrack** knob sets how much.
 
+**Fidelity:**
+- **Harmonics** sets the highest frequency kept (harmonics × pitch): use 128
+  for low notes.
+- **Pitch curve** learns vibrato and glides.
+- **Sharp attacks** keeps plucks crisp.
+- **Components** goes up to 64.
+
+Then click **Inspect…** to compare each sound's original, its analysis and
+its point in the model, with scores, spectrograms and A/B playback. The
+[manual](docs/manual.md#11-inspecting-the-model) explains what to change
+for what you find.
+
+![Inspect](docs/screenshot-inspect.png)
+
 Removing sounds or changing Components retrains quickly (analysed sounds
 are cached). Your project remembers the file list and settings, and
 **Save Model…** keeps the space as a file.
@@ -197,6 +213,9 @@ build/tools/pcs-render space.pcsm out.wav --z 2,-1,0.5 --length 4
 
 # Everything at once: training set, model, listening examples and a map
 scripts/render_examples.sh build renders
+
+# How faithfully a model reproduces its training files (scores; --out DIR writes A/B WAVs)
+build/tools/pcs-inspect space.pcsm training/
 
 # CPU use of the synth in a few stress cases
 build/tools/pcs-bench space.pcsm

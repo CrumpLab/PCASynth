@@ -42,6 +42,10 @@ struct AnalysisSettings
     bool trackPartials = true;       // follow stretched (inharmonic) partials
     Representation representation = Representation::Decibels;
     PitchTracking pitchTracking = PitchTracking::Auto;
+    // Fidelity
+    bool trackPitch = true;          // follow the pitch frame by frame (vibrato, glides, pitch drops): a pitch curve
+    bool sharpAttacks = true;        // onset frames also use a window half as long, for crisper attacks
+    double attackSeconds = 0.15;     // how long the onset (short-window) part lasts
 };
 
 // Noise bands are fixed ratios of the fundamental (so they move with the
@@ -65,6 +69,8 @@ struct HarmonicSound
     int numNoiseBands = 0;
     std::vector<float> noiseDb;      // numFrames × numNoiseBands
     std::vector<float> partialCents; // numHarmonics (empty: exact harmonics)
+    std::vector<float> pitchCents;   // numFrames: the pitch in each frame, cents from f0 (empty: not tracked)
+    double onsetSeconds = 0.0;       // where frame 0 sits in the file (not saved in models)
 
     float at (int frame, int h) const { return db[static_cast<size_t> (frame * numHarmonics + h)]; }
     float noiseAt (int frame, int b) const { return noiseDb[static_cast<size_t> (frame * numNoiseBands + b)]; }

@@ -13,7 +13,7 @@ namespace pcs {
 
 namespace {
 constexpr char kMagic[4] = { 'P', 'C', 'S', 'M' };
-constexpr uint32_t kFormatVersion = 2; // 2: Stage 7 sections (noise, partials, representation, pitch)
+constexpr uint32_t kFormatVersion = 3; // 2: Stage 7 sections (noise, partials, representation, pitch); 3: pitch curve, fit report
 constexpr float kCeilingDb = 12.0f;
 
 void putU32 (std::vector<uint8_t>& v, uint32_t x)
@@ -70,7 +70,8 @@ nlohmann::json settingsToJson (const AnalysisSettings& s)
              { "onsetThresholdDb", s.onsetThresholdDb }, { "normalizeLoudness", s.normalizeLoudness },
              { "noiseBands", s.noiseBands }, { "trackPartials", s.trackPartials },
              { "representation", representationName (s.representation) },
-             { "pitchTracking", pitchTrackingName (s.pitchTracking) } };
+             { "pitchTracking", pitchTrackingName (s.pitchTracking) },
+             { "trackPitch", s.trackPitch }, { "sharpAttacks", s.sharpAttacks }, { "attackSeconds", s.attackSeconds } };
 }
 AnalysisSettings settingsFromJson (const nlohmann::json& j)
 {
@@ -90,6 +91,9 @@ AnalysisSettings settingsFromJson (const nlohmann::json& j)
     s.trackPartials = j.value ("trackPartials", false);
     s.representation = representationFrom (j.value ("representation", std::string ("dB")));
     s.pitchTracking = pitchTrackingFrom (j.value ("pitchTracking", std::string ("off")));
+    s.trackPitch = j.value ("trackPitch", false); // absent before version 3: how those models were analysed
+    s.sharpAttacks = j.value ("sharpAttacks", false);
+    s.attackSeconds = j.value ("attackSeconds", s.attackSeconds);
     return s;
 }
 } // namespace
@@ -97,12 +101,15 @@ AnalysisSettings settingsFromJson (const nlohmann::json& j)
 namespace {
 constexpr float kLinearScale = 100.0f; // Linear representation: full scale ~ 100, like dB values
 
-void setLayout (Model& m, const AnalysisSettings& s, int frames, int harmonics, int noiseBands, bool partials)
+void setLayout (Model& m, const AnalysisSettings& s, int frames, int harmonics, int noiseBands, bool partials, bool pitchCurve)
 {
     m.numFrames = frames;
     m.numHarmonics = harmonics;
     m.numNoiseBands = noiseBands;
     m.hasPartials = partials;
+    m.hasPitchCurve = pitchCurve;
+    // 10 cents of pitch in a frame counts like 1 dB on every harmonic of that frame.
+    m.pitchCurveWeight = 0.1f * std::sqrt (static_cast<float> (harmonics));
     m.representation = s.representation;
     // Loudness counts like a shift of every band; 10 cents like 1 dB held for the whole note.
     m.loudnessWeight = std::sqrt (static_cast<float> (harmonics + noiseBands));
@@ -119,6 +126,71 @@ float noiseCeiling (const std::vector<const HarmonicSound*>& sounds, float floor
         for (float v : s->noiseDb)
             top = std::max (top, v);
     return top + 6.0f;
+}
+} // namespace
+
+namespace {
+// The fit report: each training row rebuilt from the mean plus one component
+// at a time, compared on the harmonic levels (dB) where the sound is within 60
+// dB of its loudest. Rows are the vectors the PCA saw (pitch direction removed).
+void fitReport (Model& m, const std::vector<std::vector<float>>& rows)
+{
+    const int k = m.numComponents(), frames = m.numFrames, harmonics = m.numHarmonics;
+    const float floorLin = std::pow (10.0f, m.floorDb / 20.0f);
+    auto toDb = [&] (const std::vector<float>& v, int t, int h) {
+        const float x = v[static_cast<size_t> (t * harmonics + h)];
+        switch (m.representation)
+        {
+            case Representation::Decibels: return std::max (x, m.floorDb);
+            case Representation::ShapeLoudness:
+                return std::max (x + v[static_cast<size_t> (m.loudnessOffset() + t)] / m.loudnessWeight, m.floorDb);
+            case Representation::Linear: return std::max (20.0f * std::log10 (std::max (x / kLinearScale + floorLin, 1e-12f)), m.floorDb);
+        }
+        return x;
+    };
+    m.fitByComponents.assign (static_cast<size_t> (k + 1), 0.0f);
+    m.fitErrorDb.assign (rows.size(), 0.0f);
+    std::vector<float> recon;
+    for (size_t r = 0; r < rows.size(); ++r)
+    {
+        const auto& row = rows[r];
+        float peak = m.floorDb;
+        for (int t = 0; t < frames; ++t)
+            for (int h = 0; h < harmonics; ++h)
+                peak = std::max (peak, toDb (row, t, h));
+        const float floor = peak - 60.0f;
+        std::vector<float> original (static_cast<size_t> (frames * harmonics));
+        for (int t = 0; t < frames; ++t)
+            for (int h = 0; h < harmonics; ++h)
+                original[static_cast<size_t> (t * harmonics + h)] = toDb (row, t, h);
+        recon = m.pca.mean;
+        for (int j = 0; j <= k; ++j)
+        {
+            if (j > 0)
+            {
+                const auto score = static_cast<float> (m.pca.score (static_cast<int> (r), j - 1));
+                const float* c = m.pca.component (j - 1);
+                for (size_t i = 0; i < recon.size(); ++i)
+                    recon[i] += score * c[i];
+            }
+            double sum = 0.0;
+            long cells = 0;
+            for (int t = 0; t < frames; ++t)
+                for (int h = 0; h < harmonics; ++h)
+                {
+                    const float x = original[static_cast<size_t> (t * harmonics + h)];
+                    if (x <= floor)
+                        continue;
+                    const float d = x - std::max (toDb (recon, t, h), floor);
+                    sum += static_cast<double> (d) * d;
+                    ++cells;
+                }
+            const auto err = static_cast<float> (cells > 0 ? std::sqrt (sum / static_cast<double> (cells)) : 0.0);
+            m.fitByComponents[static_cast<size_t> (j)] += err / static_cast<float> (rows.size());
+            if (j == k)
+                m.fitErrorDb[r] = err;
+        }
+    }
 }
 } // namespace
 
@@ -173,6 +245,10 @@ std::vector<float> Model::encode (const HarmonicSound& s) const
         for (int h = 0; h < numHarmonics; ++h)
             v[static_cast<size_t> (partialOffset() + h)] =
                 (h < static_cast<int> (s.partialCents.size()) ? s.partialCents[static_cast<size_t> (h)] : 0.0f) * partialWeight;
+    if (hasPitchCurve)
+        for (int t = 0; t < numFrames; ++t)
+            v[static_cast<size_t> (pitchCurveOffset() + t)] =
+                (t < static_cast<int> (s.pitchCents.size()) ? s.pitchCents[static_cast<size_t> (t)] : 0.0f) * pitchCurveWeight;
     return v;
 }
 
@@ -316,6 +392,15 @@ float Model::levelDb (const float* z, int numZ, float pitchDelta, float* scratch
     return static_cast<float> (10.0 * std::log10 (std::max (1e-12, loudest)));
 }
 
+float Model::decodePitch (int frame, const float* z, int numZ, float pitchDelta) const noexcept
+{
+    if (! hasPitchCurve)
+        return 0.0f;
+    float v = 0.0f;
+    accumulate (pitchCurveOffset() + std::clamp (frame, 0, numFrames - 1), 1, z, numZ, pitchDelta, &v);
+    return std::clamp (v / pitchCurveWeight, -1200.0f, 1200.0f);
+}
+
 HarmonicSound Model::decode (const std::vector<float>& z, float pitchDelta) const
 {
     HarmonicSound s;
@@ -338,6 +423,12 @@ HarmonicSound Model::decode (const std::vector<float>& z, float pitchDelta) cons
         s.partialCents.resize (static_cast<size_t> (numHarmonics));
         decodePartials (z.data(), nz, s.partialCents.data(), pitchDelta);
     }
+    if (hasPitchCurve)
+    {
+        s.pitchCents.resize (static_cast<size_t> (numFrames));
+        for (int t = 0; t < numFrames; ++t)
+            s.pitchCents[static_cast<size_t> (t)] = decodePitch (t, z.data(), nz, pitchDelta);
+    }
     return s;
 }
 
@@ -345,7 +436,8 @@ Model singleSoundModel (const HarmonicSound& sound, const AnalysisSettings& sett
 {
     Model m;
     m.analysis = settings;
-    setLayout (m, settings, sound.numFrames, sound.numHarmonics, sound.numNoiseBands, ! sound.partialCents.empty());
+    setLayout (m, settings, sound.numFrames, sound.numHarmonics, sound.numNoiseBands, ! sound.partialCents.empty(),
+               ! sound.pitchCents.empty());
     m.frameRate = sound.frameRate;
     m.names = { sound.name };
     m.f0s = { sound.f0 };
@@ -367,10 +459,13 @@ Model trainModel (const std::vector<HarmonicSound>& sounds, const AnalysisSettin
         throw std::invalid_argument ("at most 128 harmonics");
     Model m;
     m.analysis = settings;
-    bool partials = true;
+    bool partials = true, pitchCurve = true;
     for (const auto& s : sounds)
+    {
         partials = partials && ! s.partialCents.empty();
-    setLayout (m, settings, sounds[0].numFrames, sounds[0].numHarmonics, sounds[0].numNoiseBands, partials);
+        pitchCurve = pitchCurve && ! s.pitchCents.empty();
+    }
+    setLayout (m, settings, sounds[0].numFrames, sounds[0].numHarmonics, sounds[0].numNoiseBands, partials, pitchCurve);
     m.frameRate = sounds[0].frameRate;
     std::vector<std::vector<float>> rows;
     std::vector<double> pitches;
@@ -437,6 +532,7 @@ Model trainModel (const std::vector<HarmonicSound>& sounds, const AnalysisSettin
 
     m.pca = computePca (rows, std::min (maxComponents, kMaxComponents));
     m.finalize();
+    fitReport (m, rows);
     return m;
 }
 
@@ -454,6 +550,9 @@ std::vector<uint8_t> serializeModel (const Model& m)
     j["representation"] = representationName (m.representation);
     j["loudnessWeight"] = m.loudnessWeight;
     j["partialWeight"] = m.partialWeight;
+    j["hasPitchCurve"] = m.hasPitchCurve;
+    j["pitchCurveWeight"] = m.pitchCurveWeight;
+    j["fit"] = { { "errorDb", m.fitErrorDb }, { "byComponents", m.fitByComponents } };
     j["noiseCeilingDb"] = m.noiseCeilingDb;
     j["frameRate"] = m.frameRate;
     j["floorDb"] = m.floorDb;
@@ -504,6 +603,13 @@ Model deserializeModel (const uint8_t* data, size_t size)
         m.representation = representationFrom (j.value ("representation", std::string ("dB")));
         m.loudnessWeight = j.value ("loudnessWeight", 1.0f);
         m.partialWeight = j.value ("partialWeight", 1.0f);
+        m.hasPitchCurve = j.value ("hasPitchCurve", false);
+        m.pitchCurveWeight = j.value ("pitchCurveWeight", 1.0f);
+        if (j.contains ("fit"))
+        {
+            m.fitErrorDb = j.at ("fit").value ("errorDb", std::vector<float>());
+            m.fitByComponents = j.at ("fit").value ("byComponents", std::vector<float>());
+        }
         m.noiseCeilingDb = j.value ("noiseCeilingDb", 0.0f);
         m.frameRate = j.at ("frameRate");
         m.floorDb = j.at ("floorDb");
@@ -528,7 +634,7 @@ Model deserializeModel (const uint8_t* data, size_t size)
         throw std::runtime_error (std::string ("bad model header: ") + e.what());
     }
     if (m.numFrames <= 0 || m.numHarmonics <= 0 || m.numHarmonics > kMaxModelHarmonics || m.numNoiseBands < 0 || m.numNoiseBands > 64
-        || m.loudnessWeight <= 0.0f || m.partialWeight <= 0.0f)
+        || m.loudnessWeight <= 0.0f || m.partialWeight <= 0.0f || m.pitchCurveWeight <= 0.0f)
         throw std::runtime_error ("model header is inconsistent");
     m.pca.numRows = static_cast<int> (m.names.size());
     m.pca.dims = m.dims();

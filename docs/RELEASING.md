@@ -105,7 +105,7 @@ VST3 host):
 - [ ] Random walk synced to tempo follows tempo changes.
 - [ ] MPE on the Osmose (or another MPE controller): per-note bend,
       pressure and slide; notes do not leak into each other.
-- [ ] CPU in the DAW's meter is in line with `pcs-bench` (manual §12).
+- [ ] CPU in the DAW's meter is in line with `pcs-bench` (manual §13).
 - [ ] Offline bounce matches real-time playback.
 
 ## Building a release locally

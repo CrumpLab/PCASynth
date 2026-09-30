@@ -6,10 +6,10 @@ namespace {
 std::string settingsKey (const pcs::AnalysisSettings& s)
 {
     // Only what changes the analysis (representation and pitch tracking are applied at training).
-    return juce::String::formatted ("%d|%d|%.3f|%.3f|%.3f|%d|%.3f|%.3f|%d|%.3f|%d|%d|%d", s.midiNote, s.autoPitch ? 1 : 0,
+    return juce::String::formatted ("%d|%d|%.3f|%.3f|%.3f|%d|%.3f|%.3f|%d|%.3f|%d|%d|%d|%d|%d|%.3f", s.midiNote, s.autoPitch ? 1 : 0,
                                     s.tuneSearchCents, s.duration, s.frameRate, s.harmonics, s.floorDb, s.periodsPerWindow,
                                     s.trimOnset ? 1 : 0, s.onsetThresholdDb, s.normalizeLoudness ? 1 : 0, s.noiseBands,
-                                    s.trackPartials ? 1 : 0)
+                                    s.trackPartials ? 1 : 0, s.trackPitch ? 1 : 0, s.sharpAttacks ? 1 : 0, s.attackSeconds)
         .toStdString();
 }
 } // namespace
@@ -17,7 +17,6 @@ std::string settingsKey (const pcs::AnalysisSettings& s)
 Trainer::Trainer (std::function<void (std::shared_ptr<const pcs::Model>)> callback)
     : juce::Thread ("PCASynth training"), onModel (std::move (callback))
 {
-    formats.registerBasicFormats();
     settings.title = "Trained space";
 }
 
@@ -193,20 +192,11 @@ std::shared_ptr<const pcs::Model> Trainer::train (juce::String& error)
             auto it = cache.find (e.path);
             if (it == cache.end() || it->second.modified != modified || it->second.settingsKey != key)
             {
-                std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (file));
-                if (reader == nullptr)
-                    throw std::runtime_error ("not a readable audio file");
-                // Enough for leading silence plus the analysed duration.
-                const auto maxSamples = static_cast<juce::int64> ((s.analysis.duration + 10.0) * reader->sampleRate);
-                const int n = static_cast<int> (std::min<juce::int64> (reader->lengthInSamples, maxSamples));
-                const int ch = static_cast<int> (juce::jlimit (1u, 2u, reader->numChannels));
-                juce::AudioBuffer<float> buf (ch, n);
-                reader->read (&buf, 0, n, 0, true, ch > 1);
                 pcs::AudioBuffer audio;
-                audio.sampleRate = reader->sampleRate;
-                audio.resize (ch, n);
-                for (int c = 0; c < ch; ++c)
-                    std::copy (buf.getReadPointer (c), buf.getReadPointer (c) + n, audio.channels[static_cast<size_t> (c)].begin());
+                juce::String readError;
+                // Enough for leading silence plus the analysed duration.
+                if (! readAudio (file, s.analysis.duration + 10.0, audio, readError))
+                    throw std::runtime_error (readError.toStdString());
                 Cached c;
                 c.modified = modified;
                 c.settingsKey = key;
@@ -269,6 +259,37 @@ std::shared_ptr<const pcs::Model> Trainer::train (juce::String& error)
     }
 }
 
+bool Trainer::readAudio (const juce::File& file, double maxSeconds, pcs::AudioBuffer& audio, juce::String& error)
+{
+    juce::AudioFormatManager formats;
+    formats.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (file));
+    if (reader == nullptr)
+    {
+        error = file.existsAsFile() ? "not a readable audio file" : "file not found";
+        return false;
+    }
+    const auto maxSamples = static_cast<juce::int64> (maxSeconds * reader->sampleRate);
+    const int n = static_cast<int> (std::min<juce::int64> (reader->lengthInSamples, maxSamples));
+    const int ch = static_cast<int> (juce::jlimit (1u, 2u, reader->numChannels));
+    juce::AudioBuffer<float> buf (ch, n);
+    reader->read (&buf, 0, n, 0, true, ch > 1);
+    audio.sampleRate = reader->sampleRate;
+    audio.resize (ch, n);
+    for (int c = 0; c < ch; ++c)
+        std::copy (buf.getReadPointer (c), buf.getReadPointer (c) + n, audio.channels[static_cast<size_t> (c)].begin());
+    return true;
+}
+
+juce::File Trainer::fileFor (const juce::String& soundName) const
+{
+    const juce::ScopedLock sl (lock);
+    for (const auto& e : entries)
+        if (e.name == soundName)
+            return juce::File (e.path);
+    return {};
+}
+
 juce::ValueTree Trainer::toValueTree() const
 {
     const auto s = getSettings();
@@ -286,6 +307,9 @@ juce::ValueTree Trainer::toValueTree() const
     t.setProperty ("partials", s.analysis.trackPartials, nullptr);
     t.setProperty ("representation", static_cast<int> (s.analysis.representation), nullptr);
     t.setProperty ("pitchTracking", static_cast<int> (s.analysis.pitchTracking), nullptr);
+    t.setProperty ("frameRate", s.analysis.frameRate, nullptr);
+    t.setProperty ("pitchCurve", s.analysis.trackPitch, nullptr);
+    t.setProperty ("sharpAttacks", s.analysis.sharpAttacks, nullptr);
     for (const auto& e : getEntries())
     {
         juce::ValueTree f ("File");
@@ -314,6 +338,9 @@ void Trainer::fromValueTree (const juce::ValueTree& t)
     s.analysis.trackPartials = t.getProperty ("partials", true);
     s.analysis.representation = static_cast<pcs::Representation> (juce::jlimit (0, 2, static_cast<int> (t.getProperty ("representation", 0))));
     s.analysis.pitchTracking = static_cast<pcs::PitchTracking> (juce::jlimit (0, 2, static_cast<int> (t.getProperty ("pitchTracking", 1))));
+    s.analysis.frameRate = juce::jlimit (50.0, 400.0, static_cast<double> (t.getProperty ("frameRate", 100.0)));
+    s.analysis.trackPitch = t.getProperty ("pitchCurve", true);
+    s.analysis.sharpAttacks = t.getProperty ("sharpAttacks", true);
     setSettings (s);
     const juce::ScopedLock sl (lock);
     entries.clear();

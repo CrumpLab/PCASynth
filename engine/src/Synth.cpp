@@ -301,10 +301,12 @@ void Synth::noteOn (int note, float velocity, int channel) noexcept
             v->noiseRng[b] = 1;
     }
     v->cents = {};
+    v->ownPoint = false; // until modulate() says otherwise: start from the shared point
+    v->pitchDelta = keytracking() ? model()->pitchDelta (note, params.keytrack) : 0.0f;
     if (const Model* m = model(); m != nullptr && m->hasPartials)
     {
         // Start at the right partial frequencies (they are refined every sub-block).
-        m->decodePartials (heard.data(), kMaxComponents, v->cents.data(), keytracking() ? m->pitchDelta (note, params.keytrack) : 0.0f);
+        m->decodePartials (heard.data(), kMaxComponents, v->cents.data(), v->pitchDelta);
     }
     v->spread = {};
     if (params.mod.voiceSpread > 0.0f)
@@ -330,6 +332,10 @@ void Synth::noteOn (int note, float velocity, int channel) noexcept
         v->im[static_cast<size_t> (h)] = std::sin (phase0[static_cast<size_t> (h)]);
         v->amp[static_cast<size_t> (h)] = 0.0f;
     }
+    // The pitch curve and partials are set exactly on the first sub-block, from
+    // the point as it is then (a restarted walk has moved it by then).
+    v->curveCents = 0.0f;
+    v->retunePending = true;
     setVoiceFrequency (*v);
 }
 
@@ -352,7 +358,7 @@ void Synth::noteOff (int note, int channel) noexcept
 
 void Synth::setVoiceFrequency (Voice& v) noexcept
 {
-    v.freq = midiToHz (v.note + bend * params.pitchBendRange + v.noteBend * params.mpe.noteBendRange);
+    v.freq = midiToHz (v.note + bend * params.pitchBendRange + v.noteBend * params.mpe.noteBendRange + v.curveCents / 100.0);
     const Model* m = model();
     const int modelH = m != nullptr ? m->numHarmonics : 0;
     const int limit = std::min (modelH, std::max (1, params.maxHarmonics));
@@ -376,7 +382,8 @@ void Synth::setVoiceFrequency (Voice& v) noexcept
         v.cr[static_cast<size_t> (h)] = std::cos (w);
         v.ci[static_cast<size_t> (h)] = std::sin (w);
     }
-    if (v.freq != v.noiseFreq)
+    // The noise bands are wide: follow the pitch once it has moved 3 cents.
+    if (v.noiseFreq <= 0.0 || std::abs (std::log2 (v.freq / v.noiseFreq)) > 3.0 / 1200.0)
         setNoiseFilters (v);
 }
 
@@ -430,6 +437,18 @@ float Synth::computeLevelGain (const Point& z, float pitchDelta) noexcept
     const float level = m.levelDb (z.data(), kMaxComponents, pitchDelta, scratchLevel.data(), scratchLevelN.data());
     // Cut as much as needed; boost only a little (near-silent points stay quiet rather than turning into hiss).
     return dbToLin (lock * std::clamp (current->refLevelDb - level, -48.0f, 12.0f));
+}
+
+float Synth::pitchCurveAt (const Voice& v, double pos) const noexcept
+{
+    const auto& m = *current->model;
+    if (! m.hasPitchCurve || params.pitchEnvelope == 0.0f)
+        return 0.0f;
+    const float* z = v.ownPoint ? v.point.data() : heard.data();
+    const int t0 = std::clamp (static_cast<int> (std::floor (pos)), 0, m.numFrames - 1);
+    const auto frac = static_cast<float> (std::clamp (pos - t0, 0.0, 1.0));
+    const float a = m.decodePitch (t0, z, kMaxComponents, v.pitchDelta), b = m.decodePitch (t0 + 1, z, kMaxComponents, v.pitchDelta);
+    return params.pitchEnvelope * (a + frac * (b - a));
 }
 
 bool Synth::keytracking() const noexcept
@@ -789,6 +808,19 @@ void Synth::renderVoice (Voice& v, int n) noexcept
     if (v.ownPoint && refresh && v.levelTick++ % 4 == 0)
         v.levelTarget = computeLevelGain (v.point, v.pitchDelta);
     v.levelGain = v.levelTick <= 1 ? v.levelTarget : v.levelGain + 0.1f * (v.levelTarget - v.levelGain);
+    // The learned pitch curve (vibrato, glides), at the same rate.
+    const bool exact = v.retunePending;
+    v.retunePending = false;
+    bool retune = exact;
+    if (refresh)
+    {
+        const float curve = pitchCurveAt (v, v.pos);
+        if (exact || std::abs (curve - v.curveCents) > 0.05f)
+        {
+            v.curveCents = curve;
+            retune = true;
+        }
+    }
     if (m.hasPartials && refresh)
     {
         const float* want = heardCents.data();
@@ -802,15 +834,17 @@ void Synth::renderVoice (Voice& v, int n) noexcept
             m.decodePartials (heard.data(), kMaxComponents, heardCents.data());
             centsStamp = stamp;
         }
-        bool changed = false;
+        bool changed = exact;
         for (int h = 0; h < m.numHarmonics && ! changed; ++h)
             changed = std::abs (want[h] - v.cents[static_cast<size_t> (h)]) > 0.01f;
         if (changed)
         {
             std::copy (want, want + m.numHarmonics, v.cents.begin());
-            setVoiceFrequency (v);
+            retune = true;
         }
     }
+    if (retune)
+        setVoiceFrequency (v);
 
     // Target amplitudes at the end of this sub-block.
     const bool noiseOn = m.numNoiseBands > 0 && params.noiseDb > -59.9f;

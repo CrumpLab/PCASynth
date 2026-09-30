@@ -26,6 +26,8 @@ juce_add_plugin(PCASynth
 target_sources(PCASynth PRIVATE
     src/Controls.cpp
     src/EnvelopeView.cpp
+    src/InspectPanel.cpp
+    src/Inspector.cpp
     src/MorphPad.cpp
     src/ParamGrid.cpp
     src/Params.cpp
@@ -46,7 +48,8 @@ set(PCS_FACTORY_MODEL "${PCS_FACTORY_DIR}/synthetic.pcsm")
 add_custom_command(
     OUTPUT "${PCS_FACTORY_MODEL}"
     COMMAND pcs-testgen "${PCS_FACTORY_DIR}/training"
-    COMMAND pcs-train -o "${PCS_FACTORY_MODEL}" --title "Synthetic instruments" "${PCS_FACTORY_DIR}/training"
+    # 32 components keeps the plugin binary small (the factory sounds need no more to play).
+    COMMAND pcs-train -o "${PCS_FACTORY_MODEL}" --title "Synthetic instruments" --components 32 "${PCS_FACTORY_DIR}/training"
     DEPENDS pcs-testgen pcs-train
     COMMENT "Training the factory model"
     VERBATIM

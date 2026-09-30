@@ -64,6 +64,10 @@ public:
     std::shared_ptr<const pcs::Model> trainNow (juce::String& error);
 
     static bool isAudioFile (const juce::File& f);
+    // Reads up to `maxSeconds` of an audio file (any thread). False, with a reason, if it can't.
+    static bool readAudio (const juce::File& file, double maxSeconds, pcs::AudioBuffer& audio, juce::String& error);
+    // The file in the training list for a sound (by name); none if it isn't listed.
+    juce::File fileFor (const juce::String& soundName) const;
     static const juce::Identifier treeType;
 
 private:
@@ -85,7 +89,6 @@ private:
     Settings settings;
     juce::String status;
     std::map<juce::String, Cached> cache;
-    juce::AudioFormatManager formats;
     std::atomic<double> progress { 0.0 };
     std::atomic<int> version { 0 };
     std::shared_ptr<std::atomic<bool>> alive = std::make_shared<std::atomic<bool>> (true);

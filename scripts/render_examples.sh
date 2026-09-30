@@ -9,3 +9,5 @@ mkdir -p "$OUT"
 "$BUILD/tools/pcs-testgen" "$OUT/training" > /dev/null
 "$BUILD/tools/pcs-train" -o "$OUT/synthetic.pcsm" "$OUT/training" | tee "$OUT/training.txt"
 "$BUILD/tools/pcs-examples" "$OUT/synthetic.pcsm" "$OUT/training" "$OUT/examples"
+# How faithfully the model reproduces each training sound (see pcs-inspect).
+"$BUILD/tools/pcs-inspect" "$OUT/synthetic.pcsm" "$OUT/training" | tee "$OUT/inspect.txt"
