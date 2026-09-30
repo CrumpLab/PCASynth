@@ -87,6 +87,13 @@ struct Model
     // The whole sound at `z`.
     HarmonicSound decode (const std::vector<float>& z, float pitchDelta = 0.0f) const;
 
+    // Loudness at `z` (dB): the loudest of kLevelProbes frames, in the units
+    // analysis normalises by (harmonic amplitudes² + 2 × noise RMS²). For
+    // level compensation; real-time safe with scratch buffers of numHarmonics
+    // and numNoiseBands floats.
+    static constexpr int kLevelProbes = 8;
+    float levelDb (const float* z, int numZ, float pitchDelta, float* scratchH, float* scratchN) const noexcept;
+
     // Components pre-scaled by their SD (built by finalize()).
     std::vector<float> loadings;
     void finalize();

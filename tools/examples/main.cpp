@@ -395,6 +395,19 @@ int main (int argc, char** argv)
             lfo.mod.lfo[1] = { true, LfoShape::SmoothRandom, 1.5f, false, 4.0f, 1.0f, 1 };
             write ("14_lfos", renderNotes (model, lfo, pad (16.0), 17.0),
                    "Two LFOs: a slow sine on PC1 (±2 SD, 4 s cycle) and a smooth random LFO on PC2 (±1 SD).");
+
+            // 19. Stage 8: Level Lock on a wide walk.
+            auto wide = base();
+            wide.mod.walk.mode = WalkMode::Jumps;
+            wide.mod.walk.rate = 0.8f;
+            wide.mod.walk.glide = 0.6f;
+            wide.mod.walk.amount = 2.5f;
+            wide.gainDb = -24.0f;
+            auto locked = wide;
+            locked.levelLock = 1.0f;
+            write ("19_level_lock", sequence ({ renderNotes (model, wide, pad (12.0), 12.5), renderNotes (model, locked, pad (12.0), 12.5) }, 1.0),
+                   "A wide random walk (Jumps, 2.5 SD), with Level Lock off, then on. Off: points far from the training set jump "
+                   "tens of dB in level. On: every point stays near the training sounds' loudness.");
         }
 
         // 15-18. Stage 7: noise, partial tuning, timbre following pitch, representations.

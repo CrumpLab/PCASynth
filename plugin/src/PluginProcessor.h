@@ -40,10 +40,13 @@ public:
     bool supportsMPE() const override { return true; }
     double getTailLengthSeconds() const override;
 
+    // One host program. Presets live in the editor's preset bar: exposing them
+    // as VST3 programs adds a program-change parameter whose restore fights
+    // the saved state (pluginval's state-restoration test fails).
     int getNumPrograms() override { return 1; }
     int getCurrentProgram() override { return 0; }
     void setCurrentProgram (int) override {}
-    const juce::String getProgramName (int) override { return {}; }
+    const juce::String getProgramName (int) override { return getPresetName(); }
     void changeProgramName (int, const juce::String&) override {}
 
     void getStateInformation (juce::MemoryBlock& destData) override;
@@ -112,6 +115,17 @@ public:
     int getVoiceInfo (pcs::Synth::VoiceInfo* out, int max) const;
     bool getNewestVoicePoint (Point& out) const noexcept;
 
+    // ---- presets (Stage 8, message thread) ----
+    // A factory preset: the factory space, every parameter at its default but
+    // the preset's own, and its point.
+    void loadFactoryPreset (int index);
+    int getFactoryPresetIndex() const noexcept { return currentProgram.load(); } // -1: none
+    // User presets hold the whole state (model included) but not the editor's
+    // layout or the training list. Both return an error, empty on success.
+    juce::String savePresetFile (const juce::File& file);
+    juce::String loadPresetFile (const juce::File& file);
+    juce::String getPresetName() const { return getUiValue ("presetName", "").toString(); }
+
     // Editor settings saved with the state (map axes, morph corners, ...).
     juce::var getUiValue (const juce::Identifier& key, const juce::var& fallback) const;
     void setUiValue (const juce::Identifier& key, const juce::var& value);
@@ -125,6 +139,7 @@ public:
 
 private:
     void timerCallback() override;
+    void writeState (juce::MemoryBlock& dest, bool asPreset);
     void setParamValue (const juce::String& id, float realValue);
     void setDetail (const Point& d) noexcept;
 
@@ -160,6 +175,7 @@ private:
     int numVoiceInfos = 0;
     std::array<std::atomic<float>, pcs::kMaxComponents> newestPoint {};
     std::atomic<bool> hasNewest { false };
+    std::atomic<int> currentProgram { -1 }; // factory preset loaded last (-1: none, or a user preset)
 
     // MPE setup from the controller: RPN 6 (MPE Configuration Message) sets the
     // zone and turns MPE on; RPN 0 on a member channel sets the note bend

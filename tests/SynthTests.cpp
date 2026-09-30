@@ -416,3 +416,56 @@ TEST_CASE ("A model swapped in plays exactly as in a fresh synth (no stale cache
         diff = std::max (diff, static_cast<double> (std::abs (a[i] - b[i])));
     CHECK (diff < 1e-6);
 }
+
+TEST_CASE ("A voice's own point, when it has not moved, sounds like the shared point", "[synth][stage8]")
+{
+    // The per-voice path decodes into a cache refreshed every few sub-blocks and
+    // shifted frame by frame; it must land on the same amplitudes as the shared
+    // path, loop crossfades included.
+    const auto m = smallModel();
+    auto p = at ({ 1.0f, -0.5f, 0.3f });
+    p.mode = PlayMode::Loop;
+    p.loopStart = 0.2f;
+    p.loopEnd = 0.5f;
+    const std::vector<Note> notes { { 0.0, 1.2, 48, 0.8f }, { 0.1, 1.0, 55, 0.6f } };
+    const auto shared = renderNotes (m, p, notes, 1.6);
+    p.mod.velocity = { 0, 0.0f }; // velocity moves each voice along PC1, by nothing: every voice has its own point
+    const auto own = renderNotes (m, p, notes, 1.6);
+    double diff = 0.0;
+    for (size_t i = 0; i < shared.channels[0].size(); ++i)
+        diff = std::max (diff, static_cast<double> (std::abs (shared.channels[0][i] - own.channels[0][i])));
+    CHECK (rms (shared, 0.2, 1.0) > 0.01);
+    CHECK (diff < 1e-5);
+}
+
+TEST_CASE ("Level Lock holds far-out points near the training sounds' loudness", "[synth][stage8]")
+{
+    const auto m = smallModel();
+    auto level = [&] (const std::vector<float>& z, float lock) {
+        auto p = at (z);
+        p.mode = PlayMode::Loop;
+        p.levelLock = lock;
+        return 20.0 * std::log10 (rms (renderNotes (m, p, { { 0.0, 1.0, 48, 0.8f } }, 1.1), 0.1, 1.0));
+    };
+    // Training sounds keep (nearly) their level ...
+    for (int i = 0; i < m->numSounds(); i += 3)
+        CHECK (std::abs (level (m->soundZ (i), 1.0f) - level (m->soundZ (i), 0.0f)) < 3.0);
+    // ... while points off the training set, which can be tens of dB out, come back.
+    std::vector<double> free, locked;
+    for (const auto& z : { std::vector<float> { 3, 3, 3, 3 }, { 4, -4, 4, -4 }, { -3, 3, -3, 3 }, { 0, 0, 0, 0, 3, 3, 3, 3 } })
+    {
+        free.push_back (level (z, 0.0f));
+        locked.push_back (level (z, 1.0f));
+    }
+    std::vector<double> ref;
+    for (int i = 0; i < m->numSounds(); ++i)
+        ref.push_back (level (m->soundZ (i), 0.0f));
+    const double lo = *std::min_element (ref.begin(), ref.end()) - 6.0, hi = *std::max_element (ref.begin(), ref.end()) + 6.0;
+    for (double l : locked)
+    {
+        CHECK (l > lo);
+        CHECK (l < hi);
+    }
+    const auto spread = [] (const std::vector<double>& v) { return *std::max_element (v.begin(), v.end()) - *std::min_element (v.begin(), v.end()); };
+    CHECK (spread (locked) < spread (free));
+}

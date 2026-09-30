@@ -57,6 +57,7 @@ struct SynthParams
     MpeParams mpe;                          // per-note expression (Stage 6)
     float noiseDb = 0.0f;                   // residual noise level vs the model (dB); <= -60 mutes it (Stage 7)
     float keytrack = 1.0f;                  // how much timbre follows pitch (models with pitch tracking)
+    float levelLock = 0.0f;                 // 0..1: pulls every point's loudness towards the training sounds' (Stage 8)
     double bpm = 120.0;                     // for synced walk steps and LFOs
 };
 
@@ -81,6 +82,8 @@ public:
     static constexpr int kMaxHarmonics = 128;
     static constexpr int kSubBlock = 32;
     static constexpr int kMaxNoiseBands = 64;
+    static constexpr int kLanes = 8; // oscillators and noise bands run in groups of this many (SIMD)
+    static constexpr int kOwnRefresh = 4; // sub-blocks between decodes of a voice's own point
 
     // A model plus the per-model buffers the synth needs, built off the
     // audio thread so a model can be swapped in without allocating.
@@ -90,8 +93,10 @@ public:
         std::vector<float> cache;       // numFrames × numHarmonics, linear amplitude
         std::vector<float> noiseCache;  // numFrames × numNoiseBands, linear RMS
         std::vector<uint32_t> stamps;   // per frame: point the cache was decoded for
+        std::vector<float> bandEdges;   // noise band edges, multiples of f0 (numNoiseBands + 1)
         std::vector<Point> soundZ;      // training sounds' coordinates (for walk tours)
         Point relSd {};                 // each component's SD relative to PC1
+        float refLevelDb = 0.0f;        // the training sounds' average Model::levelDb (for Level Lock)
     };
     static std::unique_ptr<ModelSlot> makeSlot (std::shared_ptr<const Model> model); // allocates
 
@@ -150,7 +155,9 @@ private:
         float releaseSeconds = 0.3f;
         double freq = 0.0;
         int numHarmonics = 0;
-        std::array<float, kMaxHarmonics> re {}, im {}, cr {}, ci {}, amp {};
+        // Oscillators, in lanes of kLanes (see renderVoice): partials past
+        // numHarmonics, up to the next multiple of kLanes, stay silent.
+        alignas (32) std::array<float, kMaxHarmonics> re {}, im {}, cr {}, ci {}, amp {};
         float velocity = 1.0f;
         RandomWalk walk;     // the voice's own walk (Walk Per Voice)
         Point spread {};     // Voice Spread offset
@@ -165,8 +172,16 @@ private:
         std::array<float, kMaxHarmonics> cents {}, hf {}; // partial offsets applied; partial frequencies (Hz)
         float pitchDelta = 0.0f;
         int numNoiseBands = 0;
-        std::array<float, kMaxNoiseBands> nb0 {}, na1 {}, na2 {}, nz1 {}, nz2 {}, nGain {}, nNorm {}, nFc {};
-        std::array<uint32_t, kMaxNoiseBands> noiseRng {}; // an independent source per band (their powers add)
+        alignas (32) std::array<float, kMaxNoiseBands> nb0 {}, na1 {}, na2 {}, nz1 {}, nz2 {}, nGain {}, nNorm {}, nFc {};
+        alignas (32) std::array<uint32_t, kMaxNoiseBands> noiseRng {}; // an independent source per band (their powers add)
+        double noiseFreq = -1.0; // fundamental the noise filters were designed for
+        // The voice's own point decoded (linear) at frames ownT0 and ownT0 + 1,
+        // refreshed every kOwnRefresh sub-blocks or when the frame changes.
+        std::array<float, kMaxHarmonics> own0 {}, own1 {};
+        std::array<float, kMaxNoiseBands> ownN0 {}, ownN1 {};
+        int ownT0 = -1, ownRefresh = 0;
+        float levelGain = 1.0f, levelTarget = 1.0f; // Level Lock at the voice's own point
+        uint32_t levelTick = 0;
     };
 
     void handle (const MidiEvent& e) noexcept;
@@ -174,11 +189,13 @@ private:
     void noteOff (int note, int channel) noexcept;
     bool isMemberChannel (int channel) const noexcept;
     void setVoiceFrequency (Voice& v) noexcept;
+    void setNoiseFilters (Voice& v) noexcept;
     void render (float* out, int n) noexcept;
-    void renderVoice (Voice& v, float* out, int n) noexcept;
+    void renderVoice (Voice& v, int n) noexcept;
     int frame (int t) noexcept; // decodes frame t at the heard point into the caches (once per point); returns t clamped
     // Linear harmonic amplitudes (and noise band RMS, if `noise`) at envelope position `pos`.
-    void frameAt (const Voice& v, double pos, float* harmonics, float* noise) noexcept;
+    // `cached`: a voice's own point may come from its cache (see Voice::own0).
+    void frameAt (Voice& v, double pos, float* harmonics, float* noise, bool cached) noexcept;
     bool keytracking() const noexcept;
     void modulate (int n) noexcept;
 
@@ -200,14 +217,23 @@ private:
     Point heard {};
     std::array<float, kMaxHarmonics> scratchC {}, heardCents {};
     uint32_t centsStamp = 0;
+    // Level Lock at the shared point, for the stamp and amount it was computed for.
+    float sharedLevelGain = 1.0f, levelLockFor = 0.0f;
+    uint32_t levelStamp = 0;
+    float computeLevelGain (const Point& z, float pitchDelta) noexcept;
     std::array<float, kMaxNoiseBands> scratchN {}, scratchN2 {}, scratchN3 {}, scratchN4 {}, cacheScratchN {};
 
     // MPE: each channel's latest per-note values (index 1..16).
     std::array<float, 17> chBend {}, chPressure {}, chSlide {};
     std::array<float, kMaxComponents> zSmooth {};
     uint32_t stamp = 1;
-    std::array<float, kMaxHarmonics> scratchDb {}, scratchA {}, scratchB {};
+    std::array<float, kMaxHarmonics> scratchDb {}, scratchA {}, scratchB {}, scratchLevel {};
+    std::array<float, kMaxNoiseBands> scratchLevelN {};
     std::array<float, kSubBlock> mono {};
+    // Every voice's partials and noise, summed per lane; reduced to mono once per sub-block.
+    alignas (32) std::array<float, kSubBlock * kLanes> lanes {};
+    std::array<float, kMaxHarmonics> tiltGain {};
+    float tiltFor = 0.0f;
     std::array<float, kMaxHarmonics> phase0 {};
 };
 

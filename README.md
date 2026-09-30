@@ -13,10 +13,11 @@ bank of sine oscillators, so any pitch plays the learned timbre. See
 
 By [Matthew Crump](https://crumplab.com), Brooklyn College of CUNY.
 
-**Status: Stage 7 (version 0.7.0).** A playable VST3 (plus a Standalone
-app) with its own UI:
+**Status: version 0.8.0 (all eight planned stages).** A playable VST3
+(plus a Standalone app) with its own UI:
 - a map of the sound space, a four-corner morph pad, a live view of the
   sound;
+- factory and user presets;
 - training on your own audio;
 - random walks, LFOs and expression;
 - MPE for controllers such as the Osmose;
@@ -24,6 +25,8 @@ app) with its own UI:
   partials, and timbre that follows pitch when trained on several notes.
 
 It has not yet been played in a DAW or on an Osmose.
+
+**[Read the manual](docs/manual.md)** for every control, with tips.
 
 ![The plugin window](docs/screenshot.png)
 
@@ -33,15 +36,24 @@ Download `PCASynth-macOS` from the latest successful
 [build](../../actions/workflows/build.yml) run (or a release). Then either:
 
 - run the `.pkg`, which installs `PCASynth.vst3` into
-  `/Library/Audio/Plug-Ins/VST3`, or
+  `/Library/Audio/Plug-Ins/VST3` (and, under Customize, the Standalone app
+  into `/Applications`), or
 - copy `PCASynth.vst3` from the zip into `~/Library/Audio/Plug-Ins/VST3`.
 
-Builds are ad-hoc signed. If macOS blocks the plugin, run
+Builds without the maintainer's Developer ID are ad-hoc signed (see
+[`docs/RELEASING.md`](docs/RELEASING.md) for signed, notarized releases).
+If macOS blocks the plugin, run
 `xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/VST3/PCASynth.vst3`.
 Rescan plug-ins in your DAW; PCASynth appears under CrumpLab as an
-instrument. The zip also has a Standalone app for trying it without a DAW.
+instrument. The zip also has the Standalone app, for trying it without a
+DAW, and the manual.
 
 ## Playing it
+
+Start with the **Preset** menu (top right). Factory presets cover
+instruments, pads, random walks and MPE. **Save Preset…** stores the
+current sound, including a trained space, as a `.pcspreset` file you can
+share.
 
 - **Sound map** (left): every training sound on two components (pick them
   under the map).
@@ -67,6 +79,8 @@ instrument. The zip also has a Standalone app for trying it without a DAW.
 - **Noise** sets the level of the learned breath and bow noise ("off" = pure
   harmonics). **Keytrack** sets how much timbre follows pitch, for spaces
   trained on several notes.
+- **Level Lock** (default 100 %) keeps every point near the training sounds'
+  loudness. Far-out points can otherwise be tens of dB louder or quieter.
 - **Jump to** / **Centre** go to a training sound or the average.
   **Export WAV…** renders the last note you played at the current point.
 - **Load Model…** or drop a `.pcsm` file on the window to play a saved
@@ -183,6 +197,9 @@ build/tools/pcs-render space.pcsm out.wav --z 2,-1,0.5 --length 4
 
 # Everything at once: training set, model, listening examples and a map
 scripts/render_examples.sh build renders
+
+# CPU use of the synth in a few stress cases
+build/tools/pcs-bench space.pcsm
 ```
 
 ## Licence

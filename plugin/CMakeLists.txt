@@ -29,6 +29,8 @@ target_sources(PCASynth PRIVATE
     src/MorphPad.cpp
     src/ParamGrid.cpp
     src/Params.cpp
+    src/PresetBar.cpp
+    src/Presets.cpp
     src/PluginEditor.cpp
     src/PluginProcessor.cpp
     src/SoundMap.cpp

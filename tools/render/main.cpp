@@ -30,6 +30,7 @@ void usage()
                  "    --gain DB           output gain\n"
                  "    --noise DB          residual noise level vs the model (-60 = off)\n"
                  "    --keytrack K        how much timbre follows pitch (models with pitch tracking)\n"
+                 "    --level-lock L      0..1: hold every point near the training sounds' loudness\n"
                  "  movement (Stage 5):\n"
                  "    --walk MODE         drift | jumps | tour | neighbour\n"
                  "    --walk-amount SD    how far (tours: 1 = arrive at each sound)\n"
@@ -80,6 +81,7 @@ int main (int argc, char** argv)
             else if (a == "--gain") p.gainDb = std::stof (next());
             else if (a == "--noise") p.noiseDb = std::stof (next());
             else if (a == "--keytrack") p.keytrack = std::stof (next());
+            else if (a == "--level-lock") p.levelLock = std::stof (next());
             else if (a == "--scan") p.scanPosition = std::stof (next());
             else if (a == "--loop")
             {

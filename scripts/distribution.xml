@@ -3,13 +3,18 @@
     <title>PCASynth @VERSION@</title>
     <welcome file="welcome.txt" mime-type="text/plain"/>
     <license file="LICENSE.txt" mime-type="text/plain"/>
-    <options customize="never" require-scripts="false" hostArchitectures="arm64,x86_64"/>
+    <options customize="allow" require-scripts="false" hostArchitectures="arm64,x86_64"/>
     <domains enable_localSystem="true"/>
     <choices-outline>
         <line choice="vst3"/>
+        <line choice="app"/>
     </choices-outline>
-    <choice id="vst3" title="VST3" description="For Live and other VST3 hosts.">
+    <choice id="vst3" title="VST3 plug-in" description="For Live and other VST3 hosts (/Library/Audio/Plug-Ins/VST3).">
         <pkg-ref id="@ID@.vst3"/>
     </choice>
+    <choice id="app" title="Standalone app" start_selected="false" description="PCASynth without a DAW (/Applications).">
+        <pkg-ref id="@ID@.app"/>
+    </choice>
     <pkg-ref id="@ID@.vst3" version="@VERSION@" onConclusion="none">vst3.pkg</pkg-ref>
+    <pkg-ref id="@ID@.app" version="@VERSION@" onConclusion="none">app.pkg</pkg-ref>
 </installer-gui-script>

@@ -41,10 +41,13 @@ jobs:
           xvfb-run -a ./pluginval --strictness-level 10 --validate-in-process \
             "build/plugin/PCASynth_artefacts/Release/VST3/PCASynth.vst3"
 
+      - name: CPU benchmark (informational)
+        run: build/tools/pcs-bench build/plugin/factory/synthetic.pcsm 5
+
       - name: Editor snapshot
         run: |
           mkdir -p ui
-          xvfb-run -a build/plugin/pcs-ui-snapshot ui/editor.png 1180 840 vowel_1
+          xvfb-run -a build/plugin/pcs-ui-snapshot ui/editor.png 1180 840 "preset:Vowel Choir"
           xvfb-run -a build/plugin/pcs-ui-snapshot ui/editor-morph.png 1180 840 x 0.3 0.7
           xvfb-run -a build/plugin/pcs-ui-snapshot ui/editor-train.png 1180 840 train
           xvfb-run -a build/plugin/pcs-ui-snapshot ui/editor-walk.png 1180 840 walk
@@ -126,7 +129,22 @@ jobs:
           rm certs.p12
 
       - name: Package (zip + installer)
-        run: scripts/package_macos.sh build/plugin/PCASynth_artefacts/Release dist
+        run: |
+          # Notarizing takes minutes: only for releases (tags v*). Other builds are still signed when the secrets exist.
+          if [[ "$GITHUB_REF" != refs/tags/v* ]]; then unset APPLE_ID; fi
+          scripts/package_macos.sh build/plugin/PCASynth_artefacts/Release dist
+
+      - name: Check signatures
+        run: |
+          mkdir -p check && cd check
+          ditto -x -k ../dist/*.zip .
+          codesign --verify --deep --strict --verbose=2 PCASynth.vst3 PCASynth.app
+          pkgutil --check-signature ../dist/*.pkg || true
+          if [[ -n "$MACOS_SIGN_APP" ]]; then spctl --assess --type execute --verbose PCASynth.app || true; fi
+
+      - name: Remove signing keychain
+        if: always() && env.MACOS_CERTS_P12 != ''
+        run: security delete-keychain build.keychain || true
 
       - uses: actions/upload-artifact@v4
         with:

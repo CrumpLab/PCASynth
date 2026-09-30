@@ -2,6 +2,7 @@
 // sounds, and the state round trip with an embedded model.
 #include "../src/PluginEditor.h"
 #include "../src/PluginProcessor.h"
+#include "../src/Presets.h"
 #include "TrainingSet.h"
 #include "pcs/Wav.h"
 
@@ -477,6 +478,105 @@ int main()
         const auto tracked = playNote (*r2, 67, 0.8, 1.0);
         check (rms (tracked, 0.1, 0.7) > 0.005, "a pitch-tracked space plays");
         dir.deleteRecursively();
+    }
+
+    // ---- Stage 8: presets, Level Lock ----
+    {
+        auto q = fresh();
+        const auto& presets = pcsplugin::factoryPresets();
+        check (presets.size() >= 16 && presets[0].name == "Init" && q->getNumPrograms() == 1,
+               "factory presets exist (in the editor; the host sees one program)");
+        check (std::abs (getParam (*q, "level_lock") - 1.0f) < 1e-6f, "Level Lock is on by default");
+        setParam (*q, "level_lock", 0.3f);
+        check (std::abs (q->currentSynthParams().levelLock - 0.3f) < 0.01f, "and reaches the synth");
+
+        // Every preset loads its sound and point, and plays.
+        bool allPlay = true, allAtSound = true;
+        for (int i = 0; i < static_cast<int> (presets.size()); ++i)
+        {
+            q->loadFactoryPreset (i);
+            const auto& pr = presets[static_cast<size_t> (i)];
+            if (q->getFactoryPresetIndex() != i || q->getPresetName() != pr.name || q->getProgramName (0) != pr.name)
+                allAtSound = false;
+            if (pr.sound.isNotEmpty())
+            {
+                const auto m = q->getModel();
+                const int s = m->soundIndex (pr.sound.toStdString());
+                float want = s >= 0 ? m->soundZ (s)[0] : 0.0f;
+                for (const auto& [component, offset] : pr.offsets)
+                    want += component == 0 ? offset : 0.0f;
+                if (s < 0 || std::abs (getParam (*q, "pc1") - juce::jlimit (-4.0f, 4.0f, want)) > 1e-3f)
+                    allAtSound = false;
+            }
+            const auto played = playNote (*q, 57, 0.8, 1.2);
+            float peak = 0.0f;
+            bool allFinite = true;
+            for (float x : played)
+            {
+                peak = std::max (peak, std::abs (x));
+                allFinite = allFinite && std::isfinite (x);
+            }
+            const double level = rms (played, 0.05, 0.8);
+            std::printf ("  %-22s rms %.4f peak %.3f\n", pr.name.toRawUTF8(), level, peak);
+            if (! allFinite || level < 0.002 || peak > 1.5f)
+                allPlay = false;
+        }
+        check (allAtSound, "each factory preset goes to its sound");
+        check (allPlay, "each factory preset plays, at a sane level");
+
+        // A preset starts from the defaults.
+        setParam (*q, "gain", 3.0f);
+        setParam (*q, "pc5", 2.0f);
+        q->loadFactoryPreset (0);
+        check (std::abs (getParam (*q, "gain") + 12.0f) < 1e-3f && std::abs (getParam (*q, "pc5")) < 1e-4f && q->getDirectionSound().isEmpty(),
+               "loading a preset resets what it does not set");
+
+        // The preset survives a session; host program calls change nothing.
+        q->loadFactoryPreset (3);
+        setParam (*q, "pc3", 1.1f);
+        juce::MemoryBlock st;
+        q->getStateInformation (st);
+        auto q2 = fresh();
+        q2->setStateInformation (st.getData(), static_cast<int> (st.getSize()));
+        q2->setCurrentProgram (0);
+        check (q2->getFactoryPresetIndex() == 3 && q2->getPresetName() == presets[3].name && std::abs (getParam (*q2, "pc3") - 1.1f) < 1e-3f,
+               "the preset name is saved; a host program change keeps your edits");
+
+        // User presets: the whole sound, model included, but not the editor layout.
+        auto file = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("pcs-presets/Test Sound.pcspreset");
+        file.getParentDirectory().deleteRecursively();
+        auto u = fresh();
+        u->setModel (smallModel(), false);
+        u->jumpToSound (3);
+        setParam (*u, "walk_on", 1.0f);
+        setParam (*u, "release", 1.25f);
+        u->setDirectionSound ("reed_1");
+        u->setUiValue ("tab", 2);
+        check (u->savePresetFile (file).isEmpty() && file.existsAsFile(), "a user preset saves");
+        auto v = fresh();
+        v->setUiValue ("tab", 1);
+        check (v->loadPresetFile (file).isEmpty(), "and loads");
+        check (! v->isFactoryModel() && v->getModel()->title == "Small test space" && std::abs (getParam (*v, "release") - 1.25f) < 1e-3f
+                   && std::abs (getParam (*v, "walk_on") - 1.0f) < 1e-6f && v->getDetail() == u->getDetail() && v->getDirectionSound() == "reed_1",
+               "with its space, point and settings");
+        check (static_cast<int> (v->getUiValue ("tab", 0)) == 1 && v->getPresetName() == "Test Sound" && v->getFactoryPresetIndex() == -1,
+               "keeping the editor's layout, and naming the preset");
+        const auto a1 = playNote (*u, 60, 0.5, 0.8), a2 = playNote (*v, 60, 0.5, 0.8);
+        double gap = 0.0;
+        for (size_t k = 0; k < a1.size(); ++k)
+            gap = std::max (gap, static_cast<double> (std::abs (a1[k] - a2[k])));
+        check (rms (a1, 0.05, 0.4) > 0.002 && gap < 1e-5, "a loaded preset sounds like the saved one");
+        // A factory-space preset stays small and brings the factory space back.
+        auto w = fresh();
+        w->loadFactoryPreset (5);
+        auto smallPreset = file.getSiblingFile ("Small.pcspreset");
+        w->savePresetFile (smallPreset);
+        check (smallPreset.getSize() < 20000 && v->loadPresetFile (smallPreset).isEmpty() && v->isFactoryModel(), "a factory-space preset is small and restores the factory space");
+        auto junk = file.getSiblingFile ("junk.pcspreset");
+        junk.replaceWithText ("not a preset");
+        check (v->loadPresetFile (junk).isNotEmpty() && v->isFactoryModel(), "a broken preset file is refused");
+        check (pcsplugin::findUserPresets (file.getParentDirectory()).size() == 3, "user presets are found in their folder");
+        file.getParentDirectory().deleteRecursively();
     }
 
     std::printf (failures == 0 ? "all plugin checks passed\n" : "%d plugin checks FAILED\n", failures);

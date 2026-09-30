@@ -287,6 +287,35 @@ void Model::decodePartials (const float* z, int numZ, float* outCents, float pit
         outCents[h] = std::clamp (outCents[h] / partialWeight, -600.0f, 1200.0f);
 }
 
+float Model::levelDb (const float* z, int numZ, float pitchDelta, float* scratchH, float* scratchN) const noexcept
+{
+    const float floorLin = std::pow (10.0f, floorDb / 20.0f);
+    auto energy = [floorLin] (float db) {
+        const float a = std::max (0.0f, std::pow (10.0f, db / 20.0f) - floorLin); // as the synth plays it
+        return a * a;
+    };
+    // Probes spaced logarithmically (frame 0, a few early ones for attacks, then
+    // wider apart), taking the loudest: close to the loudest-frame measure the
+    // analysis normalises every training sound by.
+    double loudest = 0.0;
+    for (int k = 0; k < kLevelProbes; ++k)
+    {
+        const int t = std::clamp (static_cast<int> (std::lround (std::pow (static_cast<double> (numFrames), k / (kLevelProbes - 1.0)))) - 1, 0, numFrames - 1);
+        decodeFrame (t, z, numZ, scratchH, pitchDelta);
+        double e = 0.0;
+        for (int h = 0; h < numHarmonics; ++h)
+            e += energy (scratchH[h]);
+        if (numNoiseBands > 0)
+        {
+            decodeNoiseFrame (t, z, numZ, scratchN, pitchDelta);
+            for (int b = 0; b < numNoiseBands; ++b)
+                e += 2.0 * energy (scratchN[b]);
+        }
+        loudest = std::max (loudest, e);
+    }
+    return static_cast<float> (10.0 * std::log10 (std::max (1e-12, loudest)));
+}
+
 HarmonicSound Model::decode (const std::vector<float>& z, float pitchDelta) const
 {
     HarmonicSound s;

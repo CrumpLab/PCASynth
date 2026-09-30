@@ -5,6 +5,7 @@
 #include "MorphPad.h"
 #include "ParamGrid.h"
 #include "PluginProcessor.h"
+#include "PresetBar.h"
 #include "SoundMap.h"
 #include "Theme.h"
 #include "TrainPanel.h"
@@ -37,6 +38,7 @@ public:
     MorphPad& getMorphPad() noexcept { return morphPad; }
     EnvelopeView& getEnvelopeView() noexcept { return envelope; }
     TrainPanel& getTrainPanel() noexcept { return trainPanel; }
+    PresetBar& getPresetBar() noexcept { return presetBar; }
     void selectTab (int index) { showTab (index); }
 
 private:
@@ -55,6 +57,7 @@ private:
         meanButton { "Centre" }, trainToggle { "Train..." }, saveButton { "Save Model..." };
     juce::Label title, modelInfo, jumpLabel { {}, "Jump to" }, status;
     juce::ComboBox soundBox;
+    PresetBar presetBar;
     SoundMap soundMap;
     MorphPad morphPad;
     EnvelopeView envelope;

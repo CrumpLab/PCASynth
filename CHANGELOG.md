@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.8.0] - 2026-09-30
+
+### Stage 8: polish and release
+- **Presets:** 21 factory presets on the factory space (instruments, pads,
+  random walks, MPE), chosen from the preset bar. Save your own
+  as `.pcspreset` files: the whole sound, including a trained space, so
+  they play anywhere. The new preset bar has previous/next, the menu and
+  Save Preset… .
+- **Level Lock** (new knob, default 100 %): holds every point near the
+  training sounds' loudness. Points far from the training set could be
+  30 dB louder or quieter, so random walks jumped in level; now they stay
+  steady. The training sounds themselves barely change.
+- **Faster:** the oscillators and noise filters run as 8-wide SIMD vectors
+  (SSE/AVX on Intel, NEON on Apple Silicon). Voices with their own point
+  refresh it every ~3 ms instead of every 0.7 ms. Measured on the factory
+  space, before → after:
+
+  | Case | Before | After |
+  |---|---|---|
+  | 16 voices with noise | 12 % | 4.4 % |
+  | 16 voices each walking on its own | 21 % | 7.5 % |
+  | 32 MPE voices | 34 % | 14 % |
+
+  These include Level Lock. New `pcs-bench` tool.
+- **Manual:** `docs/manual.md`, covering every control; it is also shipped in
+  the zip.
+- **Release:** `docs/RELEASING.md` explains Developer ID signing and
+  notarization through repository secrets, and tagging.
+  - The installer can also install the Standalone app.
+  - Notarization runs only for tags.
+  - CI checks the signatures and removes the signing keychain afterwards.
+- `pcs-render --level-lock`. Listening example 19: a wide walk with Level
+  Lock off, then on.
+
+### Changed
+- The default Gain is now −12 dB (was −6 dB), for headroom with Level Lock.
+  Saved projects keep their own gain; projects saved before 0.8.0 get Level
+  Lock at 100 % when opened.
+
 ## [0.7.0] - 2026-09-30
 
 ### Stage 7: richer model

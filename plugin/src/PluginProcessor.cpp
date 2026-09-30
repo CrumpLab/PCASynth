@@ -2,6 +2,7 @@
 #include "PluginEditor.h"
 
 #include "FactoryModel.h"
+#include "Presets.h"
 
 #include "pcs/Wav.h"
 
@@ -107,6 +108,75 @@ void PCASynthProcessor::setParamValue (const juce::String& paramId, float realVa
         param->setValueNotifyingHost (param->convertTo0to1 (realValue));
         param->endChangeGesture();
     }
+}
+
+// ---- presets ----------------------------------------------------------------
+
+void PCASynthProcessor::loadFactoryPreset (int index)
+{
+    const auto& all = pcsplugin::factoryPresets();
+    if (index < 0 || index >= static_cast<int> (all.size()))
+        return;
+    const auto& preset = all[static_cast<size_t> (index)];
+    if (! isFactoryModel())
+        loadFactoryModel();
+    for (auto* param : AudioProcessor::getParameters())
+        if (auto* ranged = dynamic_cast<juce::RangedAudioParameter*> (param))
+            ranged->setValueNotifyingHost (ranged->getDefaultValue());
+    for (const auto& [paramId, value] : preset.params)
+        setParamValue (paramId, value);
+    setDirectionSound (preset.direction);
+
+    Point z {};
+    const auto m = getModel();
+    if (const int sound = m != nullptr ? m->soundIndex (preset.sound.toStdString()) : -1; sound >= 0)
+    {
+        const auto zs = m->soundZ (sound);
+        std::copy (zs.begin(), zs.begin() + static_cast<long> (std::min (zs.size(), z.size())), z.begin());
+    }
+    for (const auto& [component, offset] : preset.offsets)
+        z[static_cast<size_t> (component)] += offset;
+    beginPointGesture();
+    setPoint (z);
+    endPointGesture();
+
+    currentProgram = index;
+    setUiValue ("presetName", preset.name);
+    sendChangeMessage();
+    updateHostDisplay (ChangeDetails().withProgramChanged (true));
+}
+
+juce::String PCASynthProcessor::savePresetFile (const juce::File& file)
+{
+    const auto previous = getPresetName();
+    setUiValue ("presetName", file.getFileNameWithoutExtension());
+    juce::MemoryBlock data;
+    writeState (data, true);
+    if (! file.getParentDirectory().createDirectory() || ! file.replaceWithData (data.getData(), data.getSize()))
+    {
+        setUiValue ("presetName", previous);
+        return "Could not write " + file.getFullPathName();
+    }
+    currentProgram = -1;
+    return {};
+}
+
+juce::String PCASynthProcessor::loadPresetFile (const juce::File& file)
+{
+    juce::MemoryBlock data;
+    if (! file.loadFileAsData (data))
+        return "Could not read " + file.getFileName();
+    if (data.getSize() < 16 || std::memcmp (data.getData(), kStateMagic, 4) != 0)
+        return file.getFileName() + " is not a PCASynth preset";
+    // The editor's layout stays as it is.
+    const auto tab = getUiValue ("tab", 0), showTraining = getUiValue ("showTraining", false);
+    setStateInformation (data.getData(), static_cast<int> (data.getSize()));
+    setUiValue ("tab", tab);
+    setUiValue ("showTraining", showTraining);
+    setUiValue ("presetName", file.getFileNameWithoutExtension());
+    currentProgram = -1;
+    sendChangeMessage();
+    return {};
 }
 
 void PCASynthProcessor::setDetail (const Point& d) noexcept
@@ -471,7 +541,9 @@ void PCASynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
 
 juce::AudioProcessorEditor* PCASynthProcessor::createEditor() { return new PCASynthEditor (*this); }
 
-void PCASynthProcessor::getStateInformation (juce::MemoryBlock& destData)
+void PCASynthProcessor::getStateInformation (juce::MemoryBlock& destData) { writeState (destData, false); }
+
+void PCASynthProcessor::writeState (juce::MemoryBlock& destData, bool asPreset)
 {
     auto state = parameters.copyState();
     state.setProperty ("stateVersion", kStateVersion, nullptr);
@@ -480,7 +552,16 @@ void PCASynthProcessor::getStateInformation (juce::MemoryBlock& destData)
         d.add (juce::String::toHexString (static_cast<juce::int64> (std::bit_cast<uint32_t> (v)))); // bit-exact
     state.setProperty ("detail", d.joinIntoString (","), nullptr);
     state.removeChild (state.getChildWithName (Trainer::treeType), nullptr);
-    state.appendChild (trainer.toValueTree(), nullptr);
+    if (asPreset)
+    {
+        for (const char* layout : { "tab", "showTraining" })
+            state.removeProperty (layout, nullptr);
+    }
+    else
+    {
+        state.appendChild (trainer.toValueTree(), nullptr);
+        state.setProperty ("program", currentProgram.load(), nullptr);
+    }
     auto xml = state.createXml();
     if (xml == nullptr)
         return;
@@ -526,6 +607,8 @@ void PCASynthProcessor::setStateInformation (const void* data, int sizeInBytes)
             trainer.fromValueTree (training);
             tree.removeChild (training, nullptr);
         }
+        currentProgram = static_cast<int> (tree.getProperty ("program", -1));
+        tree.removeProperty ("program", nullptr);
         parameters.replaceState (tree);
         resolveDirection();
         sendChangeMessage(); // the editor re-reads its settings (map axes, morph corners)

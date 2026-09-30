@@ -22,4 +22,7 @@ if(PCS_BUILD_TOOLS)
 
     add_executable(pcs-examples examples/main.cpp)
     target_link_libraries(pcs-examples PRIVATE pcs_tools_common)
+
+    add_executable(pcs-bench bench/main.cpp)
+    target_link_libraries(pcs-bench PRIVATE pcs_tools_common)
 endif()

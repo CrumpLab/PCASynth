@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <stdexcept>
 
 namespace pcs {
@@ -9,6 +10,22 @@ namespace pcs {
 namespace {
 constexpr double kTwoPi = 6.28318530717958647692;
 constexpr float kLn1000 = 6.90775527898f; // release reaches -60 dB in `release` seconds
+
+#if defined(__GNUC__) && ! defined(__clang__)
+#pragma GCC diagnostic ignored "-Wpsabi" // the vector helpers are internal and inlined: no ABI to keep
+#endif
+
+// Eight floats (or uint32s) at once, with GCC/Clang vector extensions: SSE
+// or AVX on x86, NEON on arm64, from the same source.
+using F8 = float __attribute__ ((vector_size (32)));
+using U8 = uint32_t __attribute__ ((vector_size (32)));
+using I8 = int32_t __attribute__ ((vector_size (32)));
+static_assert (Synth::kLanes == 8, "lanes are 8-wide vectors");
+template <typename V, typename T> inline V load (const T* p) noexcept { V v; std::memcpy (&v, p, sizeof v); return v; }
+template <typename V, typename T> inline void store (T* p, V v) noexcept { std::memcpy (p, &v, sizeof v); }
+
+inline float dbToLin (float db) noexcept { return std::exp2 (db * 0.166096404744f); } // 10^(db/20)
+constexpr int roundUpToLanes (int n) noexcept { return (n + Synth::kLanes - 1) / Synth::kLanes * Synth::kLanes; }
 }
 
 void Synth::prepare (double sampleRate)
@@ -42,6 +59,16 @@ std::unique_ptr<Synth::ModelSlot> Synth::makeSlot (std::shared_ptr<const Model> 
             const auto zs = model->soundZ (i);
             std::copy (zs.begin(), zs.end(), z.begin());
             slot->soundZ.push_back (z);
+        }
+        for (int b = 0; b <= model->numNoiseBands; ++b)
+            slot->bandEdges.push_back (static_cast<float> (noiseBandEdge (b, model->numNoiseBands)));
+        if (model->numSounds() > 0)
+        {
+            std::vector<float> h (static_cast<size_t> (model->numHarmonics)), nz (static_cast<size_t> (std::max (1, model->numNoiseBands)));
+            double sum = 0.0;
+            for (const auto& z : slot->soundZ)
+                sum += model->levelDb (z.data(), kMaxComponents, 0.0f, h.data(), nz.data());
+            slot->refLevelDb = static_cast<float> (sum / model->numSounds());
         }
         for (int j = 0; j < model->numComponents(); ++j)
             slot->relSd[static_cast<size_t> (j)] = static_cast<float> (model->sd (j) / model->sd (0));
@@ -83,6 +110,8 @@ void Synth::reset() noexcept
     modWheel = pressure = 0.0f;
     noteCounter = 0; // noise seeds come from it: renders after a reset are reproducible
     centsStamp = 0;
+    levelStamp = 0;
+    sharedLevelGain = 1.0f;
     chBend.fill (0.0f);
     chPressure.fill (0.0f);
     chSlide.fill (64.0f / 127.0f);
@@ -260,6 +289,11 @@ void Synth::noteOn (int note, float velocity, int channel) noexcept
     v->nz2 = {};
     v->nGain = {};
     v->numNoiseBands = 0;
+    v->noiseFreq = -1.0;
+    v->ownT0 = -1;
+    v->ownRefresh = 0;
+    v->levelGain = v->levelTarget = 1.0f;
+    v->levelTick = 0;
     for (size_t b = 0; b < v->noiseRng.size(); ++b)
     {
         v->noiseRng[b] = (0x9e3779b9u + static_cast<uint32_t> (b) * 0x85ebca6bu) ^ static_cast<uint32_t> (noteCounter * 2654435761u);
@@ -326,7 +360,8 @@ void Synth::setVoiceFrequency (Voice& v) noexcept
     int n = 0;
     while (n < limit)
     {
-        const double f = (n + 1) * v.freq * std::exp2 (v.cents[static_cast<size_t> (n)] / 1200.0);
+        const float c = v.cents[static_cast<size_t> (n)];
+        const double f = (n + 1) * v.freq * (c != 0.0f ? std::exp2 (c / 1200.0) : 1.0);
         if (f >= 0.47 * sr)
             break;
         v.hf[static_cast<size_t> (n)] = static_cast<float> (f);
@@ -337,21 +372,29 @@ void Synth::setVoiceFrequency (Voice& v) noexcept
     v.numHarmonics = n;
     for (int h = 0; h < n; ++h)
     {
-        const double w = kTwoPi * v.hf[static_cast<size_t> (h)] / sr;
-        v.cr[static_cast<size_t> (h)] = static_cast<float> (std::cos (w));
-        v.ci[static_cast<size_t> (h)] = static_cast<float> (std::sin (w));
+        const auto w = static_cast<float> (kTwoPi * v.hf[static_cast<size_t> (h)] / sr);
+        v.cr[static_cast<size_t> (h)] = std::cos (w);
+        v.ci[static_cast<size_t> (h)] = std::sin (w);
     }
+    if (v.freq != v.noiseFreq)
+        setNoiseFilters (v);
+}
 
+void Synth::setNoiseFilters (Voice& v) noexcept
+{
     // Noise bands: band-pass filters (RBJ, 0 dB peak) spanning each band, which
     // sits at fixed multiples of the played fundamental. nNorm scales unit-variance
     // white noise to unit RMS out of the filter: for H = b0 (1 - z^-2) / (1 + a1 z^-1
     // + a2 z^-2) the output variance is 2 b0² / (1 - a2) = alpha / (1 + alpha),
     // exact up to Nyquist (the analog π/2 × bandwidth rule is not).
+    v.noiseFreq = v.freq;
+    const Model* m = model();
     const int bands = m != nullptr ? std::min (m->numNoiseBands, kMaxNoiseBands) : 0;
+    const float* edges = current != nullptr ? current->bandEdges.data() : nullptr;
     int nb = 0;
     for (; nb < bands; ++nb)
     {
-        const double lo = noiseBandEdge (nb, bands) * v.freq, hi = noiseBandEdge (nb + 1, bands) * v.freq;
+        const double lo = edges[nb] * v.freq, hi = edges[nb + 1] * v.freq;
         if (lo >= 0.47 * sr)
             break;
         const double top = std::min (hi, 0.49 * sr);
@@ -368,7 +411,25 @@ void Synth::setVoiceFrequency (Voice& v) noexcept
     }
     for (int b = v.numNoiseBands; b < nb; ++b)
         v.nGain[static_cast<size_t> (b)] = 0.0f;
+    // Bands past the top (up to a whole lane group) stay silent: no filter, no gain.
+    for (int b = nb; b < roundUpToLanes (nb); ++b)
+    {
+        const auto bs = static_cast<size_t> (b);
+        v.nb0[bs] = v.na1[bs] = v.na2[bs] = v.nz1[bs] = v.nz2[bs] = v.nGain[bs] = 0.0f;
+        v.nFc[bs] = 0.0f;
+    }
     v.numNoiseBands = nb;
+}
+
+float Synth::computeLevelGain (const Point& z, float pitchDelta) noexcept
+{
+    const auto& m = *current->model;
+    const float lock = std::clamp (params.levelLock, 0.0f, 1.0f);
+    if (lock <= 0.0f || m.numSounds() == 0)
+        return 1.0f;
+    const float level = m.levelDb (z.data(), kMaxComponents, pitchDelta, scratchLevel.data(), scratchLevelN.data());
+    // Cut as much as needed; boost only a little (near-silent points stay quiet rather than turning into hiss).
+    return dbToLin (lock * std::clamp (current->refLevelDb - level, -48.0f, 12.0f));
 }
 
 bool Synth::keytracking() const noexcept
@@ -387,20 +448,20 @@ int Synth::frame (int t) noexcept
         float* dst = current->cache.data() + static_cast<size_t> (t) * static_cast<size_t> (m.numHarmonics);
         m.decodeFrame (t, heard.data(), kMaxComponents, scratchDb.data());
         for (int h = 0; h < m.numHarmonics; ++h)
-            dst[h] = std::max (0.0f, std::pow (10.0f, scratchDb[static_cast<size_t> (h)] / 20.0f) - floorLin);
+            dst[h] = std::max (0.0f, dbToLin (scratchDb[static_cast<size_t> (h)]) - floorLin);
         if (m.numNoiseBands > 0)
         {
             float* nd = current->noiseCache.data() + static_cast<size_t> (t) * static_cast<size_t> (m.numNoiseBands);
             m.decodeNoiseFrame (t, heard.data(), kMaxComponents, cacheScratchN.data()); // not scratchN: callers hold targets there
             for (int b = 0; b < m.numNoiseBands; ++b)
-                nd[b] = std::max (0.0f, std::pow (10.0f, cacheScratchN[static_cast<size_t> (b)] / 20.0f) - floorLin);
+                nd[b] = std::max (0.0f, dbToLin (cacheScratchN[static_cast<size_t> (b)]) - floorLin);
         }
         current->stamps[static_cast<size_t> (t)] = stamp;
     }
     return t;
 }
 
-void Synth::frameAt (const Voice& v, double pos, float* dst, float* noise) noexcept
+void Synth::frameAt (Voice& v, double pos, float* dst, float* noise, bool cached) noexcept
 {
     const auto& m = *current->model;
     const int h = m.numHarmonics, nb = m.numNoiseBands;
@@ -425,25 +486,47 @@ void Synth::frameAt (const Voice& v, double pos, float* dst, float* noise) noexc
         return;
     }
     // The voice's own point (and pitch, with keytracking): decode both frames for it.
-    const float floorLin = std::pow (10.0f, m.floorDb / 20.0f);
-    auto lin = [floorLin] (float db) { return std::max (0.0f, std::pow (10.0f, db / 20.0f) - floorLin); };
-    m.decodeFrame (t0, v.point.data(), kMaxComponents, scratchDb.data(), v.pitchDelta);
-    m.decodeFrame (t1, v.point.data(), kMaxComponents, scratchC.data(), v.pitchDelta);
-    for (int i = 0; i < h; ++i)
+    const float floorLin = dbToLin (m.floorDb);
+    auto decode = [&] (int t, float* harm, float* nz)
     {
-        const float a = lin (scratchDb[static_cast<size_t> (i)]), b = lin (scratchC[static_cast<size_t> (i)]);
-        dst[i] = a + frac * (b - a);
-    }
-    if (noise != nullptr && nb > 0)
-    {
-        m.decodeNoiseFrame (t0, v.point.data(), kMaxComponents, scratchN2.data(), v.pitchDelta);
-        m.decodeNoiseFrame (t1, v.point.data(), kMaxComponents, scratchN4.data(), v.pitchDelta);
-        for (int i = 0; i < nb; ++i)
+        m.decodeFrame (t, v.point.data(), kMaxComponents, harm, v.pitchDelta);
+        for (int i = 0; i < h; ++i)
+            harm[i] = std::max (0.0f, dbToLin (harm[i]) - floorLin);
+        if (nb > 0)
         {
-            const float a = lin (scratchN2[static_cast<size_t> (i)]), b = lin (scratchN4[static_cast<size_t> (i)]);
-            noise[i] = a + frac * (b - a);
+            m.decodeNoiseFrame (t, v.point.data(), kMaxComponents, nz, v.pitchDelta);
+            for (int i = 0; i < nb; ++i)
+                nz[i] = std::max (0.0f, dbToLin (nz[i]) - floorLin);
         }
+    };
+    const float *a = v.own0.data(), *b = v.own1.data(), *na = v.ownN0.data(), *nbb = v.ownN1.data();
+    if (! cached)
+    {
+        decode (t0, scratchDb.data(), scratchN2.data());
+        decode (t1, scratchC.data(), scratchN4.data());
+        a = scratchDb.data();
+        b = scratchC.data();
+        na = scratchN2.data();
+        nbb = scratchN4.data();
     }
+    else if (t0 != v.ownT0 || v.ownRefresh == kOwnRefresh)
+    {
+        if (t0 == v.ownT0 + 1 && v.ownRefresh != kOwnRefresh)
+        {
+            // Moved on by one frame at the same point: the old t1 is the new t0.
+            v.own0 = v.own1;
+            v.ownN0 = v.ownN1;
+        }
+        else
+            decode (t0, v.own0.data(), v.ownN0.data());
+        decode (t1, v.own1.data(), v.ownN1.data());
+        v.ownT0 = t0;
+    }
+    for (int i = 0; i < h; ++i)
+        dst[i] = a[i] + frac * (b[i] - a[i]);
+    if (noise != nullptr && nb > 0)
+        for (int i = 0; i < nb; ++i)
+            noise[i] = na[i] + frac * (nbb[i] - na[i]);
 }
 
 bool Synth::newestVoicePoint (Point& out) const noexcept
@@ -537,6 +620,11 @@ void Synth::modulate (int n) noexcept
     {
         if (! v.active)
             continue;
+        if (! v.ownPoint && (perVoice || keytrack))
+        {
+            v.ownRefresh = 0; // decode its own point on the next sub-block
+            v.levelTick = 0;
+        }
         v.ownPoint = perVoice || keytrack;
         if (! perVoice)
         {
@@ -583,13 +671,34 @@ void Synth::render (float* out, int n) noexcept
     if (moved)
         ++stamp;
     modulate (n);
+    if (levelStamp != stamp || levelLockFor != params.levelLock)
+    {
+        sharedLevelGain = computeLevelGain (heard, 0.0f);
+        levelStamp = stamp;
+        levelLockFor = params.levelLock;
+    }
 
+    if (params.tiltDbPerOctave != tiltFor)
+    {
+        tiltFor = params.tiltDbPerOctave;
+        for (int h = 0; h < kMaxHarmonics; ++h)
+            tiltGain[static_cast<size_t> (h)] = dbToLin (tiltFor * std::log2 (static_cast<float> (h + 1)));
+    }
+    std::fill (lanes.begin(), lanes.end(), 0.0f);
     for (auto& v : voices)
         if (v.active)
-            renderVoice (v, out, n);
+            renderVoice (v, n);
+    for (int i = 0; i < n; ++i)
+    {
+        const float* l = lanes.data() + i * kLanes;
+        float sum = 0.0f;
+        for (int k = 0; k < kLanes; ++k)
+            sum += l[k];
+        out[i] = sum;
+    }
 }
 
-void Synth::renderVoice (Voice& v, float* out, int n) noexcept
+void Synth::renderVoice (Voice& v, int n) noexcept
 {
     const auto& m = *current->model;
     const double last = m.numFrames - 1;
@@ -668,7 +777,19 @@ void Synth::renderVoice (Voice& v, float* out, int n) noexcept
 
     // Timbre following pitch (keytrack), and the partials' tuning at this point.
     v.pitchDelta = keytracking() ? m.pitchDelta (v.note + bend * params.pitchBendRange + v.noteBend * params.mpe.noteBendRange, params.keytrack) : 0.0f;
-    if (m.hasPartials)
+    // A voice's own point is decoded afresh only every kOwnRefresh sub-blocks
+    // (~3 ms), and the partials' tuning follows any point at that rate: points
+    // move smoothly, and the amplitudes ramp in between. Counted from the
+    // note's start, so a phrase played again sounds the same.
+    if (--v.ownRefresh <= 0)
+        v.ownRefresh = kOwnRefresh;
+    const bool refresh = v.ownRefresh == kOwnRefresh;
+    // Level Lock at the voice's own point: loudness changes slowly, so it is
+    // measured every fourth refresh (~11 ms) and glided to.
+    if (v.ownPoint && refresh && v.levelTick++ % 4 == 0)
+        v.levelTarget = computeLevelGain (v.point, v.pitchDelta);
+    v.levelGain = v.levelTick <= 1 ? v.levelTarget : v.levelGain + 0.1f * (v.levelTarget - v.levelGain);
+    if (m.hasPartials && refresh)
     {
         const float* want = heardCents.data();
         if (v.ownPoint)
@@ -695,10 +816,10 @@ void Synth::renderVoice (Voice& v, float* out, int n) noexcept
     const bool noiseOn = m.numNoiseBands > 0 && params.noiseDb > -59.9f;
     float* target = scratchA.data();
     float* noiseTarget = noiseOn ? scratchN.data() : nullptr;
-    frameAt (v, v.pos, target, noiseTarget);
+    frameAt (v, v.pos, target, noiseTarget, true);
     if (crossfade)
     {
-        frameAt (v, v.pos - loopLen, scratchB.data(), noiseOn ? scratchN3.data() : nullptr);
+        frameAt (v, v.pos - loopLen, scratchB.data(), noiseOn ? scratchN3.data() : nullptr, false);
         const auto g = static_cast<float> (xfFrac);
         for (int h = 0; h < v.numHarmonics; ++h)
             target[h] += g * (scratchB[static_cast<size_t> (h)] - target[h]);
@@ -706,59 +827,71 @@ void Synth::renderVoice (Voice& v, float* out, int n) noexcept
             for (int b = 0; b < m.numNoiseBands; ++b)
                 noiseTarget[b] += g * (scratchN3[static_cast<size_t> (b)] - noiseTarget[b]);
     }
-    const float level = std::pow (10.0f, params.gainDb / 20.0f) * v.gain * envEnd;
+    const float level = dbToLin (params.gainDb) * v.gain * envEnd * (v.ownPoint ? v.levelGain : sharedLevelGain);
     const float nyquistFadeStart = 0.40f * static_cast<float> (sr), nyquistFadeEnd = 0.47f * static_cast<float> (sr);
     for (int h = 0; h < v.numHarmonics; ++h)
     {
         float g = level;
-        if (params.tiltDbPerOctave != 0.0f)
-            g *= std::pow (10.0f, params.tiltDbPerOctave * std::log2 (static_cast<float> (h + 1)) / 20.0f);
+        if (tiltFor != 0.0f)
+            g *= tiltGain[static_cast<size_t> (h)];
         const float f = v.hf[static_cast<size_t> (h)];
         if (f > nyquistFadeStart)
             g *= std::clamp ((nyquistFadeEnd - f) / (nyquistFadeEnd - nyquistFadeStart), 0.0f, 1.0f);
         target[h] *= g;
     }
 
-    // Oscillator bank: amplitudes ramp linearly across the sub-block.
+    // Oscillator bank: complex rotators, amplitudes ramping linearly across the
+    // sub-block. Partials run kLanes at a time, as one vector per group;
+    // lanes past numHarmonics are silent.
     const float invN = 1.0f / static_cast<float> (n);
-    for (int h = 0; h < v.numHarmonics; ++h)
+    const int oscEnd = roundUpToLanes (v.numHarmonics);
+    for (int h = v.numHarmonics; h < oscEnd; ++h)
     {
-        const auto hs = static_cast<size_t> (h);
-        float a = v.amp[hs];
-        const float t = target[h];
-        if (a == 0.0f && t == 0.0f)
-            continue;
-        const float da = (t - a) * invN;
-        float re = v.re[hs], im = v.im[hs];
-        const float cr = v.cr[hs], ci = v.ci[hs];
+        target[h] = 0.0f;
+        v.amp[static_cast<size_t> (h)] = 0.0f;
+    }
+    for (int g0 = 0; g0 < oscEnd; g0 += kLanes)
+    {
+        bool silent = true;
+        for (int k = 0; k < kLanes; ++k)
+            silent = silent && v.amp[static_cast<size_t> (g0 + k)] == 0.0f && target[g0 + k] == 0.0f;
+        if (silent)
+            continue; // skipping keeps the phases where they were, like a partial that stays silent
+        const auto hs = static_cast<size_t> (g0);
+        F8 re = load<F8> (v.re.data() + hs), im = load<F8> (v.im.data() + hs);
+        const F8 cr = load<F8> (v.cr.data() + hs), ci = load<F8> (v.ci.data() + hs);
+        F8 a = load<F8> (v.amp.data() + hs);
+        const F8 t = load<F8> (target + g0);
+        const F8 da = (t - a) * invN;
         for (int i = 0; i < n; ++i)
         {
             a += da;
-            const float nr = re * cr - im * ci;
+            const F8 nr = re * cr - im * ci;
             im = re * ci + im * cr;
             re = nr;
-            out[i] += a * im;
+            float* acc = lanes.data() + i * kLanes;
+            store (acc, load<F8> (acc) + a * im);
         }
-        // Keep the rotator on the unit circle.
-        const float k = 1.5f - 0.5f * (re * re + im * im);
-        v.re[hs] = re * k;
-        v.im[hs] = im * k;
-        v.amp[hs] = t;
+        // Keep the rotators on the unit circle.
+        const F8 c = 1.5f - 0.5f * (re * re + im * im);
+        store (v.re.data() + hs, re * c);
+        store (v.im.data() + hs, im * c);
+        store (v.amp.data() + hs, t);
     }
 
     // Residual noise: white noise through each band's filter, gains ramping
-    // across the sub-block like the harmonics.
+    // across the sub-block like the harmonics; bands also run kLanes at a time.
     if (noiseOn || v.numNoiseBands > 0)
     {
-        const float noiseLevel = noiseOn ? level * std::pow (10.0f, params.noiseDb / 20.0f) : 0.0f;
-        std::array<float, kMaxNoiseBands> dg {};
+        const float noiseLevel = noiseOn ? level * dbToLin (params.noiseDb) : 0.0f;
+        alignas (32) std::array<float, kMaxNoiseBands> dg {};
         bool any = false;
         for (int b = 0; b < v.numNoiseBands; ++b)
         {
             const auto bs = static_cast<size_t> (b);
             float g = noiseOn ? noiseTarget[b] * v.nNorm[bs] * noiseLevel : 0.0f;
-            if (g > 0.0f && params.tiltDbPerOctave != 0.0f)
-                g *= std::pow (10.0f, params.tiltDbPerOctave * std::log2 (v.nFc[bs] / static_cast<float> (v.freq)) / 20.0f);
+            if (g > 0.0f && tiltFor != 0.0f)
+                g *= dbToLin (tiltFor * std::log2 (v.nFc[bs] / static_cast<float> (v.freq)));
             if (v.nFc[bs] > nyquistFadeStart)
                 g *= std::clamp ((nyquistFadeEnd - v.nFc[bs]) / (nyquistFadeEnd - nyquistFadeStart), 0.0f, 1.0f);
             dg[bs] = (g - v.nGain[bs]) * invN;
@@ -767,25 +900,31 @@ void Synth::renderVoice (Voice& v, float* out, int n) noexcept
         if (any)
         {
             constexpr float kUnitVariance = 1.7320508f / 2147483648.0f; // uniform int32 -> variance 1
-            for (int i = 0; i < n; ++i)
+            for (int g0 = 0; g0 < roundUpToLanes (v.numNoiseBands); g0 += kLanes)
             {
-                float acc = 0.0f;
-                for (int b = 0; b < v.numNoiseBands; ++b)
+                const auto bs = static_cast<size_t> (g0);
+                const F8 b0 = load<F8> (v.nb0.data() + bs), a1 = load<F8> (v.na1.data() + bs), a2 = load<F8> (v.na2.data() + bs);
+                const F8 dgain = load<F8> (dg.data() + bs);
+                F8 z1 = load<F8> (v.nz1.data() + bs), z2 = load<F8> (v.nz2.data() + bs), gain = load<F8> (v.nGain.data() + bs);
+                U8 r = load<U8> (v.noiseRng.data() + bs);
+                for (int i = 0; i < n; ++i)
                 {
-                    const auto bs = static_cast<size_t> (b);
-                    auto& r = v.noiseRng[bs];
                     r ^= r << 13;
                     r ^= r >> 17;
                     r ^= r << 5;
-                    const float x = static_cast<float> (static_cast<int32_t> (r)) * kUnitVariance;
+                    const F8 x = __builtin_convertvector ((I8) r, F8) * kUnitVariance;
                     // Transposed direct form II band-pass (b1 = 0, b2 = -b0).
-                    const float y = v.nb0[bs] * x + v.nz1[bs];
-                    v.nz1[bs] = -v.na1[bs] * y + v.nz2[bs];
-                    v.nz2[bs] = -v.nb0[bs] * x - v.na2[bs] * y;
-                    v.nGain[bs] += dg[bs];
-                    acc += v.nGain[bs] * y;
+                    const F8 y = b0 * x + z1;
+                    z1 = z2 - a1 * y;
+                    z2 = -(b0 * x) - a2 * y;
+                    gain += dgain;
+                    float* acc = lanes.data() + i * kLanes;
+                    store (acc, load<F8> (acc) + gain * y);
                 }
-                out[i] += acc;
+                store (v.nz1.data() + bs, z1);
+                store (v.nz2.data() + bs, z2);
+                store (v.nGain.data() + bs, gain);
+                store (v.noiseRng.data() + bs, r);
             }
         }
     }

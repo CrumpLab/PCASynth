@@ -6,11 +6,14 @@ of WAVs of different instruments all playing the same note. It learns the
 space those sounds span, and you play any point in that space: the training
 sounds themselves, morphs between them, or places no instrument has been.
 
-> **Status:** Stages 1–7 are built: the engine, the offline tools, and a
-> playable VST3 with its own UI. It trains new spaces from your audio,
-> moves through them (random walks, LFOs, expression), takes MPE (aimed at
-> the Osmose), and models noise, inharmonic partials and pitch-dependent
-> timbre. Stage 8 (polish and release) remains. Decisions are recorded in §6. Licence: open source (AGPLv3, following JUCE's open-source
+> **Status:** All eight stages are built (version 0.8.0): the engine, the
+> offline tools, and a playable VST3 with its own UI. It trains new spaces
+> from your audio, moves through them (random walks, LFOs, expression),
+> takes MPE (aimed at the Osmose), and models noise, inharmonic partials and
+> pitch-dependent timbre. Stage 8 added presets, Level Lock, SIMD rendering,
+> a manual and the release process. What remains is playing it in a DAW and
+> on an Osmose, and a signed release (§5, Stage 8). Decisions are recorded
+> in §6. Licence: open source (AGPLv3, following JUCE's open-source
 > licence).
 
 ---
@@ -522,9 +525,65 @@ the plugin's options and state.
 - 17: keytrack off/on over three octaves.
 - 18: one morph in three representations.
 
-### Stage 8: Polish and release
+### Stage 8: Polish and release — done, awaiting a signed release and a play in a DAW
 - Presets (model + point + settings), manual, CPU optimisation (SIMD
   oscillators, skipping silent harmonics), signed and notarised installer.
+
+**Built:**
+- **Presets.**
+  - 21 factory presets, which are recipes on the factory space: every
+    parameter at its default except a few, plus a point (a training sound
+    and offsets).
+  - User presets are `.pcspreset` files holding the full plugin state
+    (model included) minus the editor layout and the training list. They
+    live in `~/Library/Audio/Presets/CrumpLab/PCASynth`.
+  - A preset bar in the editor.
+  - The host sees one program, named after the current preset. Exposing the
+    presets as VST3 programs adds a program-change parameter, and pluginval's
+    state-restoration test then failed (restoring it fought the saved
+    state), so presets are chosen in the editor only.
+- **CPU.** First, a benchmark (`pcs-bench`, five stress cases). Profiling
+  showed the oscillator loop at ~50 %, then per-voice decoding and
+  retuning. Changes:
+  - Oscillators and noise filters now run 8 partials or bands at a time as
+    GCC/Clang vector types. One source gives SSE/AVX on x86 and NEON on
+    arm64, since GCC would not auto-vectorise the lane loops. Lanes past the
+    top partial are silent, and all-silent groups are skipped.
+  - Every voice mixes into shared per-lane accumulators, reduced to mono
+    once per sub-block.
+  - A voice's own point is decoded into a per-voice cache every 4
+    sub-blocks (~2.7 ms), or when the frame changes. Partial retuning
+    follows at the same rate, counted from note-on so repeated phrases stay
+    bit-identical.
+  - Noise-band edges are cached per model, and noise filters are redesigned
+    only when the pitch changes.
+  - `pow` became `exp2`, and the tilt gains are a table.
+  - Result: 3–5× less CPU (16 walking voices: 20.5 % → 6 % of a core).
+  - A test checks that the cached per-voice path renders the same as the
+    shared path; it fails when the cache is broken on purpose.
+- **Level Lock** (found while benchmarking).
+  - The problem: in the dB representation, points a few SD off the training
+    set are up to 35 dB louder than the centre, so random walks jump in
+    level.
+  - The fix: `Model::levelDb` measures a point's loudness as the loudest of
+    8 log-spaced probe frames. This is the loudest-frame energy the analysis
+    normalises every training sound by.
+  - The synth applies `lock × clamp(ref − level, −48, +12)` dB against the
+    training sounds' average. It is computed per shared-point change and
+    every ~11 ms per voice, with a glide.
+  - The plugin defaults to 100 % and a Gain of −12 dB; the engine defaults
+    to 0.
+- **Manual** (`docs/manual.md`, also in the zip) and **release process**
+  (`docs/RELEASING.md`):
+  - The signing and notarization secrets.
+  - Notarization only on tags.
+  - An installer choice for the Standalone app.
+  - Signature checks in CI.
+
+**Not done here** (needs the user's hardware and accounts):
+- a signed, notarized release, which needs the Developer ID secrets and a
+  tag;
+- listening in a DAW, and MPE on a real Osmose.
 
 ## 6. Decisions
 

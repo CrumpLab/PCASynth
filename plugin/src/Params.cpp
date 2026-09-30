@@ -112,7 +112,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
     addFloat (l, id::velocity, "Velocity Sensitivity", { 0.0f, 1.0f }, 1.0f);
     addInt (l, id::bendRange, "Pitch Bend Range", 0, 24, 2);
     addInt (l, id::polyphony, "Polyphony", 1, pcs::Synth::kMaxVoices, 16);
-    addFloat (l, id::gain, "Gain", { -48.0f, 12.0f }, -6.0f, "dB");
+    addFloat (l, id::gain, "Gain", { -48.0f, 12.0f }, -12.0f, "dB");
 
     // Stage 5: random walk.
     addBool (l, id::walkOn, "Walk On", false);
@@ -173,6 +173,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
         })));
     l.add (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { id::keytrack, 1 }, "Keytrack",
                                                         juce::NormalisableRange<float> (0.0f, 1.5f), 1.0f, percent()));
+
+    // Stage 8: every point near the training sounds' loudness (walks without level jumps).
+    addPercent (l, id::levelLock, "Level Lock", 1.0f);
     return l;
 }
 
@@ -230,6 +233,7 @@ ParamReader::ParamReader (juce::AudioProcessorValueTreeState& s)
     mpeSlideMode = s.getRawParameterValue (id::mpeSlideMode);
     noise = s.getRawParameterValue (id::noise);
     keytrack = s.getRawParameterValue (id::keytrack);
+    levelLock = s.getRawParameterValue (id::levelLock);
     for (int n = 0; n < 2; ++n)
         lfos[static_cast<size_t> (n)] = { s.getRawParameterValue (id::lfo (n, "on")), s.getRawParameterValue (id::lfo (n, "shape")),
                                           s.getRawParameterValue (id::lfo (n, "rate")), s.getRawParameterValue (id::lfo (n, "sync")),
@@ -305,6 +309,7 @@ pcs::SynthParams ParamReader::read (const std::array<float, pcs::kMaxComponents>
     p.mpe.slideBipolar = index (mpeSlideMode) == 0;
     p.noiseDb = get (noise);
     p.keytrack = get (keytrack);
+    p.levelLock = get (levelLock);
     return p;
 }
 

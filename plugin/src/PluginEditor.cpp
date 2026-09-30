@@ -1,12 +1,12 @@
 #include "PluginEditor.h"
 
 namespace {
-constexpr int kBarHeight = 76;
+constexpr int kBarHeight = 84;
 constexpr int kDefaultWidth = 1180, kDefaultHeight = 840;
 } // namespace
 
 PCASynthEditor::PCASynthEditor (PCASynthProcessor& p)
-    : AudioProcessorEditor (p), processor (p), soundMap (p), morphPad (p), envelope (p), strip (p), controls (p), trainPanel (p), walkPanel (p), modPanel (p), mpePanel (p)
+    : AudioProcessorEditor (p), processor (p), presetBar (p), soundMap (p), morphPad (p), envelope (p), strip (p), controls (p), trainPanel (p), walkPanel (p), modPanel (p), mpePanel (p)
 {
     setLookAndFeel (&lookAndFeel);
     title.setText ("PCASynth", juce::dontSendNotification);
@@ -16,7 +16,7 @@ PCASynthEditor::PCASynthEditor (PCASynthProcessor& p)
         l->setFont (theme::font (13.0f));
     status.setJustificationType (juce::Justification::centredRight);
     for (auto* c : std::initializer_list<juce::Component*> { &title, &modelInfo, &jumpLabel, &status, &loadButton, &factoryButton,
-                                                            &exportButton, &meanButton, &soundBox, &soundMap, &morphPad,
+                                                            &exportButton, &meanButton, &soundBox, &presetBar, &soundMap, &morphPad,
                                                             &envelope, &strip, &controls, &trainToggle, &saveButton })
         addAndMakeVisible (c);
     addChildComponent (trainPanel);
@@ -61,6 +61,7 @@ PCASynthEditor::PCASynthEditor (PCASynthProcessor& p)
             processor.jumpToSound (id - 1);
     };
 
+    presetBar.onMessage = [this] (const juce::String& text) { showMessage (text); };
     processor.addChangeListener (this);
     refreshModel();
     setResizable (true, true);
@@ -77,6 +78,7 @@ PCASynthEditor::~PCASynthEditor()
 
 void PCASynthEditor::refreshModel()
 {
+    presetBar.refresh();
     const auto m = processor.getModel();
     soundBox.clear (juce::dontSendNotification);
     soundMap.setModel (m);
@@ -292,7 +294,9 @@ void PCASynthEditor::resized()
     meanButton.setBounds (row1.removeFromLeft (80).reduced (2));
     status.setBounds (row1);
     bar.removeFromTop (6);
-    modelInfo.setBounds (bar.removeFromTop (22));
+    auto row2 = bar.removeFromTop (30);
+    presetBar.setBounds (row2.removeFromRight (juce::jmin (520, row2.getWidth() / 2)));
+    modelInfo.setBounds (row2);
 
     r = r.reduced (8);
     const int gap = 8;

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Packages the macOS build: a zip of the VST3 bundle and Standalone app, and an
-# installer (.pkg) that puts the VST3 in /Library/Audio/Plug-Ins/VST3.
+# Packages the macOS build: a zip of the VST3 bundle, the Standalone app and the
+# manual, and an installer (.pkg) that puts the VST3 in /Library/Audio/Plug-Ins/VST3
+# and (optionally) the Standalone app in /Applications.
 #
 #   scripts/package_macos.sh <artefacts dir> <output dir>
 #
@@ -11,6 +12,7 @@
 #   MACOS_SIGN_INSTALLER  "Developer ID Installer: Name (TEAMID)"    -> sign the .pkg
 #   APPLE_ID, APPLE_TEAM_ID, APPLE_APP_PASSWORD                       -> notarize and staple
 # Without them the bundles are ad-hoc signed and nothing is notarized.
+# See docs/RELEASING.md.
 set -euo pipefail
 
 ART="${1:?artefacts dir}"
@@ -24,9 +26,9 @@ STEM="PCASynth-$VERSION-macOS"
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
-mkdir -p "$WORK/vst3" "$WORK/zip" "$WORK/resources"
+mkdir -p "$WORK/vst3" "$WORK/app" "$WORK/zip" "$WORK/resources"
 cp -R "$ART/VST3/$NAME.vst3" "$WORK/vst3/"
-cp -R "$ART/Standalone/$NAME.app" "$WORK/zip/"
+cp -R "$ART/Standalone/$NAME.app" "$WORK/app/"
 
 sign_bundle() {
     if [[ -n "${MACOS_SIGN_APP:-}" ]]; then
@@ -37,7 +39,7 @@ sign_bundle() {
     codesign --verify --deep --strict "$1"
 }
 sign_bundle "$WORK/vst3/$NAME.vst3"
-sign_bundle "$WORK/zip/$NAME.app"
+sign_bundle "$WORK/app/$NAME.app"
 
 notarize() {
     xcrun notarytool submit "$1" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
@@ -47,20 +49,23 @@ NOTARIZE=0
 if [[ -n "${MACOS_SIGN_APP:-}" && -n "${APPLE_ID:-}" && -n "${APPLE_TEAM_ID:-}" && -n "${APPLE_APP_PASSWORD:-}" ]]; then
     NOTARIZE=1
     ditto -c -k --keepParent "$WORK/vst3/$NAME.vst3" "$WORK/vst3.zip"
-    ditto -c -k --keepParent "$WORK/zip/$NAME.app" "$WORK/app.zip"
+    ditto -c -k --keepParent "$WORK/app/$NAME.app" "$WORK/app.zip"
     notarize "$WORK/vst3.zip"
     notarize "$WORK/app.zip"
     xcrun stapler staple "$WORK/vst3/$NAME.vst3"
-    xcrun stapler staple "$WORK/zip/$NAME.app"
+    xcrun stapler staple "$WORK/app/$NAME.app"
 fi
 
 # ---- zip (manual install) ------------------------------------------------------
-cp -R "$WORK/vst3/$NAME.vst3" "$WORK/zip/"
+cp -R "$WORK/vst3/$NAME.vst3" "$WORK/app/$NAME.app" "$WORK/zip/"
 cp "$ROOT/README.md" "$ROOT/LICENSE" "$ROOT/CHANGELOG.md" "$WORK/zip/"
+mkdir -p "$WORK/zip/Manual"
+cp "$ROOT/docs/manual.md" "$ROOT"/docs/screenshot*.png "$WORK/zip/Manual/"
 ( cd "$WORK/zip" && ditto -c -k --sequesterRsrc . "$OUT/$STEM.zip" )
 
-# ---- installer (VST3 only) --------------------------------------------------------
-cat > "$WORK/components.plist" <<PLIST
+# ---- installer ----------------------------------------------------------------------
+component_plist() { # $1: bundle name
+    cat <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -75,21 +80,28 @@ cat > "$WORK/components.plist" <<PLIST
         <key>BundleOverwriteAction</key>
         <string>upgrade</string>
         <key>RootRelativeBundlePath</key>
-        <string>$NAME.vst3</string>
+        <string>$1</string>
     </dict>
 </array>
 </plist>
 PLIST
-pkgbuild --root "$WORK/vst3" --component-plist "$WORK/components.plist" --install-location "/Library/Audio/Plug-Ins/VST3" \
+}
+component_plist "$NAME.vst3" > "$WORK/vst3.plist"
+component_plist "$NAME.app" > "$WORK/app.plist"
+pkgbuild --root "$WORK/vst3" --component-plist "$WORK/vst3.plist" --install-location "/Library/Audio/Plug-Ins/VST3" \
     --identifier "$ID.vst3" --version "$VERSION" "$WORK/vst3.pkg"
+pkgbuild --root "$WORK/app" --component-plist "$WORK/app.plist" --install-location "/Applications" \
+    --identifier "$ID.app" --version "$VERSION" "$WORK/app.pkg"
 
 cp "$ROOT/LICENSE" "$WORK/resources/LICENSE.txt"
 cat > "$WORK/resources/welcome.txt" <<EOF2
 PCASynth $VERSION
 
 A synthesizer that plays points in a PCA space learned from recorded notes.
-This installs the VST3 plug-in into /Library/Audio/Plug-Ins/VST3.
+This installs the VST3 plug-in into /Library/Audio/Plug-Ins/VST3 and, if
+you choose it under Customize, the Standalone app into /Applications.
 In Live: Settings > Plug-Ins, then Rescan. It appears under CrumpLab.
+The manual (Manual/manual.md) is in the zip download, next to the installer.
 EOF2
 sed -e "s/@VERSION@/$VERSION/g" -e "s/@ID@/$ID/g" "$ROOT/scripts/distribution.xml" > "$WORK/distribution.xml"
 

@@ -7,6 +7,7 @@
 //   pcs-ui-snapshot out.png width height mpe     (MPE tab, three notes with their own expression)
 #include "../src/PluginEditor.h"
 #include "../src/PluginProcessor.h"
+#include "../src/Presets.h"
 #include "TrainingSet.h"
 #include "pcs/Wav.h"
 
@@ -18,7 +19,7 @@ int main (int argc, char** argv)
 {
     if (argc < 2)
     {
-        std::printf ("usage: pcs-ui-snapshot out.png [width height] [sound] [morph-u morph-v]\n");
+        std::printf ("usage: pcs-ui-snapshot out.png [width height] [sound | preset:NAME | train | walk | mod | mpe] [morph-u morph-v]\n");
         return 1;
     }
     juce::ScopedJuceInitialiser_GUI gui;
@@ -67,6 +68,15 @@ int main (int argc, char** argv)
     {
         const float u = static_cast<float> (std::atof (argv[5])), v = static_cast<float> (std::atof (argv[6]));
         processor.setPoint (ed->getMorphPad().blend (u, v));
+    }
+    else if (argc > 4 && juce::String (argv[4]).startsWith ("preset:"))
+    {
+        const auto name = juce::String (argv[4]).fromFirstOccurrenceOf ("preset:", false, false);
+        const auto& presets = pcsplugin::factoryPresets();
+        for (size_t i = 0; i < presets.size(); ++i)
+            if (presets[i].name == name)
+                processor.loadFactoryPreset (static_cast<int> (i));
+        ed->refreshModel(); // the change message would arrive via the message loop, which the snapshot doesn't run
     }
     else if (argc > 4)
         processor.jumpToSound (processor.getModel()->soundIndex (argv[4]));
